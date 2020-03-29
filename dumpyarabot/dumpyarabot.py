@@ -24,7 +24,7 @@ async def jenkins_bridge(message: types.Message):
     # await message.answer(url)
     params = (
         ('token', JENKINS_TOKEN),
-        ('LINK', url),
+        ('URL', url),
     )
 
     async with aiohttp.ClientSession() as session:
