@@ -30,7 +30,7 @@ async def jenkins_bridge(message: types.Message):
     async with aiohttp.ClientSession() as session:
         async with session.get('http://0.0.0.0:8080/job/extract_and_push/buildWithParameters',
                                params=params) as resp:
-            if resp.status == 200:
+            if resp.status in (200, 201):
                 await message.answer("Job started!")
             else:
                 await message.answer("Something went wrong!")
