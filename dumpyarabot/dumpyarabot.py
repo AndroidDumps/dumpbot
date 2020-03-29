@@ -19,6 +19,7 @@ async def jenkins_bridge(message: types.Message):
         r"(https?://(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*))")
     url = pattern.search(message.text)
     if not url:
+        await message.answer("Not a valid URL!")
         return
     url = url.group(1)
     # await message.answer(url)
