@@ -10,8 +10,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Build image.
-        run: docker build -t ghcr.io/akhilnarang/dumpbot .
+        run: docker build -t ghcr.io/androiddumps/dumpbot .
       - name: Login to container registry
-        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io --username akhilnarang --password-stdin
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io --username androiddumps --password-stdin
       - name: Push image
-        run: docker push ghcr.io/akhilnarang/dumpbot
+        run: docker push ghcr.io/androiddumps/dumpbot
