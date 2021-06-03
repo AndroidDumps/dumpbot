@@ -1,0 +1,17 @@
+on:
+  push:
+    branches: 
+    - master
+
+name: Build and push docker image to container registry
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build image.
+        run: docker build -t ghcr.io/akhilnarang/dumpbot .
+      - name: Login to container registry
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io --username akhilnarang --password-stdin
+      - name: Push image
+        run: docker push ghcr.io/akhilnarang/dumpbot
