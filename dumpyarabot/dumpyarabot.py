@@ -13,7 +13,7 @@ BOT = Bot(token=BOT_TOKEN)
 DP = Dispatcher(BOT)
 
 
-@DP.message_handler(commands=['dump'], commands_prefix='/', user_id=ALLOWED_USERS, chat_id=ALLOWED_CHATS)
+@DP.message_handler(commands=['dump'], commands_prefix='/', chat_id=ALLOWED_CHATS)
 async def jenkins_bridge(message: types.Message):
     pattern = re.compile(
         r"(https?://(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()!@:%_+.~#?&//=]*))")
