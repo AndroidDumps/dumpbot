@@ -210,7 +210,7 @@ ls system/build*.prop 2> /dev/null || ls system/system/build*.prop 2> /dev/null 
     terminate 1
 }
 
-for image in boot.img dtbo.img; do
+for image in vendor_boot.img boot.img dtbo.img; do
     if [[ ! -f ${image} ]]; then
         x=$(find . -type f -name "${image}")
         if [[ -n $x ]]; then
@@ -235,6 +235,20 @@ if [[ -f "boot.img" ]]; then
     python3 ~/vmlinux-to-elf/kallsyms-finder ./bootimg/kernel > kallsyms.txt
     # ELF
     python3 ~/vmlinux-to-elf/vmlinux-to-elf ./bootimg/kernel boot.elf
+fi
+if [[ -f "vendor_boot.img" ]]; then
+    mkdir -v vbootdts
+    ~/mkbootimg_tools/mkboot ./vendor_boot.img ./vbootimg > /dev/null
+    extract-dtb ./boot.img -o ./vbootimg > /dev/null
+    find vbootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" \;
+    # Extract ikconfig
+    if [[ "$(command -v extract-ikconfig)" ]]; then
+        extract-ikconfig boot.img > ikconfig
+    fi
+    # Kallsyms
+    python3 ~/vmlinux-to-elf/kallsyms-finder ./vbootimg/kernel > vkallsyms.txt
+    # ELF
+    python3 ~/vmlinux-to-elf/vmlinux-to-elf ./vbootimg/kernel vboot.elf
 fi
 if [[ -f "dtbo.img" ]]; then
     mkdir -v dtbodts
