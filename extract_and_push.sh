@@ -179,7 +179,7 @@ bash ~/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
 rm -fv "$FILE"
 
 PARTITIONS=(system systemex system_ext system_other
-    vendor cust odm oem factory product modem
+    vendor cust odm odm_ext oem factory product modem
     xrom oppo_product opproduct reserve india
     my_preload my_odm my_stock my_operator my_country my_product my_company my_engineering my_heytap
 )
