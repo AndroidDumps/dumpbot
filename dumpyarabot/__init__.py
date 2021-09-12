@@ -2,8 +2,9 @@
 import json
 import logging
 import sys
-from os import environ
 from os.path import dirname
+
+import decouple
 
 # WORK_DIR = dirname(__file__)
 PARENT_DIR = '/'.join(dirname(__file__).split('/')[:-1])
@@ -14,7 +15,7 @@ with open(f'{PARENT_DIR}/config.json', 'r') as f:
 BOT_TOKEN = CONFIG['bot_token']
 ALLOWED_USERS = CONFIG['allowed_users']
 ALLOWED_CHATS = CONFIG['allowed_chats']
-JENKINS_TOKEN = environ['TOKEN']
+JENKINS_TOKEN = decouple.config('TOKEN')
 
 # set logging
 FORMATTER = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s'
