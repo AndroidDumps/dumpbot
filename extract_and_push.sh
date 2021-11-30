@@ -191,7 +191,7 @@ for p in "${PARTITIONS[@]}"; do
         sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Partition Name: ${p}</code>" > /dev/null
         mkdir "$p" || rm -rf "${p:?}"/*
         7z x "$p".img -y -o"$p"/ || {
-            sudo mount -o loop "$p".img "$p"
+            sudo mount -o loop -t auto "$p".img "$p"
             mkdir "${p}_"
             sudo cp -rf "${p}/*" "${p}_"
             sudo umount "${p}"
