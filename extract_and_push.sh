@@ -416,7 +416,13 @@ is_ab=$(echo "$is_ab" | head -1)
 [[ -z ${is_ab} ]] && is_ab="false"
 
 codename=$(echo "$codename" | tr ' ' '_')
-branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
+
+if [ -z "$oplus_pipeline_key" ];then
+    branch=$(echo "$description" | head -1 | tr ' ' '-')
+else
+    branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
+fi
+
 repo_subgroup=$(echo "$brand" | tr '[:upper:]' '[:lower:]')
 [[ -z $repo_subgroup ]] && repo_subgroup=$(echo "$manufacturer" | tr '[:upper:]' '[:lower:]')
 repo_name=$(echo "$codename" | tr '[:upper:]' '[:lower:]')
