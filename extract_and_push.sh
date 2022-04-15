@@ -281,6 +281,8 @@ sort -u -o ./board-info.txt ./board-info.txt
 # Prop extraction
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting props..</code>" > /dev/null
 
+oplus_pipeline_key=$(grep -m1 -oP "(?<=^ro.oplus.pipeline_key=).*" -hs my_manifest/build*.prop)
+
 flavor=$(grep -m1 -oP "(?<=^ro.build.flavor=).*" -hs {vendor,system,system/system}/build.prop)
 [[ -z ${flavor} ]] && flavor=$(grep -m1 -oP "(?<=^ro.vendor.build.flavor=).*" -hs vendor/build*.prop)
 [[ -z ${flavor} ]] && flavor=$(grep -m1 -oP "(?<=^ro.build.flavor=).*" -hs {vendor,system,system/system}/build*.prop)
@@ -414,7 +416,7 @@ is_ab=$(echo "$is_ab" | head -1)
 [[ -z ${is_ab} ]] && is_ab="false"
 
 codename=$(echo "$codename" | tr ' ' '_')
-branch=$(echo "$description" | head -1 | tr ' ' '-')
+branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
 repo_subgroup=$(echo "$brand" | tr '[:upper:]' '[:lower:]')
 [[ -z $repo_subgroup ]] && repo_subgroup=$(echo "$manufacturer" | tr '[:upper:]' '[:lower:]')
 repo_name=$(echo "$codename" | tr '[:upper:]' '[:lower:]')
@@ -430,6 +432,7 @@ release: ${release}
 id: ${id}
 incremental: ${incremental}
 tags: ${tags}
+oplus_pipeline_key: ${oplus_pipeline_key}
 fingerprint: ${fingerprint}
 brand: ${brand}
 codename: ${codename}
