@@ -289,7 +289,7 @@ flavor=$(grep -m1 -oP "(?<=^ro.build.flavor=).*" -hs {vendor,system,system/syste
 [[ -z ${flavor} ]] && flavor=$(grep -m1 -oP "(?<=^ro.system.build.flavor=).*" -hs {system,system/system}/build*.prop)
 [[ -z ${flavor} ]] && flavor=$(grep -m1 -oP "(?<=^ro.build.type=).*" -hs {system,system/system}/build*.prop)
 
-release=$(grep -m1 -oP "(?<=^ro.build.version.release=).*" -hs {vendor,system,system/system}/build*.prop)
+release=$(grep -m1 -oP "(?<=^ro.build.version.release=).*" -hs {my_manifest,vendor,system,system/system}/build*.prop)
 [[ -z ${release} ]] && release=$(grep -m1 -oP "(?<=^ro.vendor.build.version.release=).*" -hs vendor/build*.prop)
 [[ -z ${release} ]] && release=$(grep -m1 -oP "(?<=^ro.system.build.version.release=).*" -hs {system,system/system}/build*.prop)
 release=$(echo "$release" | head -1)
