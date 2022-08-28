@@ -194,11 +194,11 @@ for p in "${PARTITIONS[@]}"; do
         7z x "$p".img -y -o"$p"/ || {
             rm -rf "${p}"/*
             ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
-                sudo mount -o loop -t auto "$p".img "$p"
+                mount -o loop -t auto "$p".img "$p"
                 mkdir "${p}_"
-                sudo cp -rf "${p}/*" "${p}_"
-                sudo umount "${p}"
-                sudo mv "${p}_" "${p}"
+                cp -rf "${p}/*" "${p}_"
+                umount "${p}"
+                mv "${p}_" "${p}"
             }
         }
         rm -fv "$p".img
