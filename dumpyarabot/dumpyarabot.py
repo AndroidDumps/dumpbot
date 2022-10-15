@@ -34,4 +34,5 @@ async def jenkins_bridge(message: types.Message):
             if resp.status in (200, 201):
                 await message.answer("Job started!")
             else:
+                print(resp.status, resp.text)
                 await message.answer("Something went wrong!")

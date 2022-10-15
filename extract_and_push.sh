@@ -193,7 +193,13 @@ for p in "${PARTITIONS[@]}"; do
         mkdir "$p" || rm -rf "${p:?}"/*
         7z x "$p".img -y -o"$p"/ || {
             rm -rf "${p}"/*
-            ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img
+            ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
+                mount -o loop -t auto "$p".img "$p"
+                mkdir "${p}_"
+                cp -rf "${p}/*" "${p}_"
+                umount "${p}"
+                mv "${p}_" "${p}"
+            }
         }
         rm -fv "$p".img
     fi
@@ -460,7 +466,7 @@ fi
 if [[ -f $twrpimg ]]; then
     echo "Detected $twrpimg! Generating twrp device tree"
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Detected $twrpimg! Generating twrp device tree</code>" > /dev/null
-    if python3 -m twrpdtgen "$twrpimg" --output ./twrp-device-tree -v --no-git; then
+    if python3 -m twrpdtgen "$twrpimg" --output ./twrp-device-tree -d; then
         if [[ ! -f "working/twrp-device-tree/README.md" ]]; then
             curl --compressed https://raw.githubusercontent.com/wiki/SebaUbuntu/TWRP-device-tree-generator/4.-Build-TWRP-from-source.md > twrp-device-tree/README.md
         fi
@@ -482,7 +488,7 @@ find . -type f -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
 
 # Check whether the subgroup exists or not
 if ! group_id_json="$(curl --compressed -s -H "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups/$ORG%2f$repo_subgroup" -s --fail)"; then
-    if ! group_id_json="$(curl --compressed -H "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups" -X POST -F name="${repo_subgroup^}" -F parent_id=3 -F path="${repo_subgroup}" -F visibility=public --silent --fail)"; then
+    if ! group_id_json="$(curl --compressed -H "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups" -X POST -F name="${repo_subgroup^}" -F parent_id=64 -F path="${repo_subgroup}" -F visibility=public --silent --fail)"; then
         echo "Creating subgroup for $repo_subgroup failed"
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Creating subgroup for $repo_subgroup failed!</code>" > /dev/null
         terminate 1
