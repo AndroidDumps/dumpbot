@@ -230,7 +230,7 @@ if [[ -f "boot.img" ]]; then
     mkdir -v bootdts
     ~/mkbootimg_tools/mkboot ./boot.img ./bootimg > /dev/null
     extract-dtb ./boot.img -o ./bootimg > /dev/null
-    find bootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" \;
+    find bootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" -printf "%P\n" \;
     # Extract ikconfig
     if [[ "$(command -v extract-ikconfig)" ]]; then
         extract-ikconfig boot.img > ikconfig
@@ -244,7 +244,7 @@ if [[ -f "vendor_boot.img" ]]; then
     mkdir -v vbootdts
     ~/mkbootimg_tools/mkboot ./vendor_boot.img ./vbootimg > /dev/null
     extract-dtb ./boot.img -o ./vbootimg > /dev/null
-    find vbootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" \;
+    find vbootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" -printf "%P\n" \;
     # Extract ikconfig
     if [[ "$(command -v extract-ikconfig)" ]]; then
         extract-ikconfig boot.img > ikconfig
@@ -257,7 +257,7 @@ fi
 if [[ -f "dtbo.img" ]]; then
     mkdir -v dtbodts
     extract-dtb ./dtbo.img -o ./dtbo > /dev/null
-    find dtbo/ -name '*.dtb' -type f -exec dtc -I dtb -O dts {} -o dtbodts/"$(echo {} | sed 's/\.dtb/.dts/')" \; > /dev/null 2>&1
+    find dtbo/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o dtbodts/"$(echo {} | sed 's/\.dtb/.dts/')" -printf "%P\n" \;
 fi
 
 # Oppo/Realme/OnePlus devices have some images in folders, extract those
