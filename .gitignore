@@ -2,7 +2,7 @@
 *tmp*
 *test*
 *__pycache__*
-config.*
 .idea/
 venv/
 *.session*
+.env

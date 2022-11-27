@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "dumpyarabot"
+version = "0.1.0"
+description = "Bot for AndroidDumps"
+authors = ["Akhil Narang <me@akhilnarang.dev>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+python-telegram-bot = {version = "^20.0a6", allow-prereleases = true}
+pydantic = {extras = ["dotenv"], version = "^1.10.2"}
+httpx = "^0.23.1"
+rich = "^12.6.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^22.10.0"
+mypy = "^0.991"
+isort = "^5.10.1"
+ruff = "^0.0.141"
+autoflake = "^2.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
