@@ -457,26 +457,16 @@ platform: ${platform}
 top_codename: ${top_codename}
 is_ab: ${is_ab}"
 
-if [[ -f "recovery.img" ]]; then
-    twrpimg=recovery.img
-else
-    twrpimg=boot.img
-fi
-
-if [[ -f $twrpimg ]]; then
-    echo "Detected $twrpimg! Generating twrp device tree"
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Detected $twrpimg! Generating twrp device tree</code>" > /dev/null
-    if python3 -m twrpdtgen "$twrpimg" --output ./twrp-device-tree -d; then
-        if [[ ! -f "working/twrp-device-tree/README.md" ]]; then
-            curl --compressed https://raw.githubusercontent.com/wiki/SebaUbuntu/TWRP-device-tree-generator/4.-Build-TWRP-from-source.md > twrp-device-tree/README.md
-        fi
-        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>TWRP device tree successfully generated.</code>" > /dev/null
+if python -c "import aospdtgen"; then
+    echo "aospdtgen installed, generating device tree"
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>aospdtgen installed, generating device tree</code>" > /dev/null
+    mkdir -p aosp-device-tree
+    if python3 -m aospdtgen . --output ./aosp-device-tree; then
+        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>AOSP device tree successfully generated.</code>" > /dev/null
     else
-        echo "Failed to generate twrp tree!"
-        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate twrp tree!</code>" > /dev/null
+        echo "Failed to generate AOSP device tree"
+        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree</code>" > /dev/null
     fi
-else
-    echo "Failed to find $twrpimg!"
 fi
 
 # Fix permissions
