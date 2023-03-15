@@ -4,6 +4,7 @@
 [[ -z ${GITLAB_SERVER} ]] && GITLAB_SERVER="dumps.tadiphone.dev"
 [[ -z ${PUSH_HOST} ]] && PUSH_HOST="dumps"
 [[ -z $ORG ]] && ORG="dumps"
+[[ -z ${USE_ALT_DUMPER} ]] && USE_ALT_DUMPER="false"
 
 CHAT_ID="-1001412293127"
 
@@ -155,6 +156,16 @@ if [[ ! -f ${FILE} ]]; then
     fi
 fi
 
+if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
+
+sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumpyara.." > /dev/null
+python3 -m dumpyara "${FILE}" -o "${PWD}" || {
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
+    terminate 1
+}
+
+else
+
 EXTERNAL_TOOLS=(
     https://github.com/AndroidDumps/Firmware_extractor
     https://github.com/xiaolu/mkbootimg_tools
@@ -204,6 +215,8 @@ for p in "${PARTITIONS[@]}"; do
         rm -fv "$p".img
     fi
 done
+
+fi
 
 # clear the last partition status
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}" > /dev/null

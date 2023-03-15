@@ -9,7 +9,7 @@ from dumpyarabot.config import settings
 console = Console()
 
 
-async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def dump_main(update: Update, context: ContextTypes.DEFAULT_TYPE, use_alt_dumper: bool = False):
     # Just here to keep mypy happy
     if update.effective_chat is None or update.effective_message is None:
         raise Exception("What happened here?")
@@ -35,7 +35,7 @@ async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Try to call jenkins
     try:
         response_text = await utils.call_jenkins(
-            schemas.DumpArguments(url=context.args[0])
+            schemas.DumpArguments(url=context.args[0], use_alt_dumper=use_alt_dumper)
         )
     except ValidationError:
         response_text = "Invalid URL"
@@ -49,3 +49,9 @@ async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_to_message_id=update.effective_message.id,
         text=response_text,
     )
+
+async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await dump_main(update, context, use_alt_dumper=False)
+
+async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await dump_main(update, context, use_alt_dumper=True)

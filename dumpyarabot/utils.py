@@ -17,6 +17,7 @@ async def call_jenkins(args: schemas.DumpArguments) -> str:
             params=(
                 ("token", settings.JENKINS_TOKEN),
                 ("URL", args.url),
+                ("USE_ALT_DUMPER", args.use_alt_dumper)
             ),
         )
         if response.status_code in (200, 201):
