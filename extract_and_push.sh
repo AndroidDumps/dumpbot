@@ -407,7 +407,7 @@ codename=$(grep -m1 -oP "(?<=^ro.product.odm.device=).*" -hs odm/etc/build*.prop
 }
 
 brand=$(grep -m1 -oP "(?<=^ro.product.odm.brand=).*" -hs odm/etc/${codename}_build.prop | head -1)
-[[ -z ${brand} ]] brand=$(grep -m1 -oP "(?<=^ro.product.odm.brand=).*" -hs odm/etc/build*.prop | head -1)
+[[ -z ${brand} ]] && brand=$(grep -m1 -oP "(?<=^ro.product.odm.brand=).*" -hs odm/etc/build*.prop | head -1)
 [[ -z ${brand} ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs odm/etc/fingerprint/build.default.prop)
 [[ -z ${brand} ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs my_product/build*.prop)
 [[ -z ${brand} ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs vendor/euclid/my_manifest/build.prop)
