@@ -501,7 +501,6 @@ if ! group_id_json="$(curl --compressed -s -H "Authorization: Bearer $DUMPER_TOK
         echo "Creating subgroup for $repo_subgroup failed"
         echo "Response: $group_id_json"
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Creating subgroup for $repo_subgroup failed!</code>" > /dev/null
-        terminate 1
     fi
 fi
 
