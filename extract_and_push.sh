@@ -202,9 +202,15 @@ for p in "${PARTITIONS[@]}"; do
     if [[ -f $p.img ]]; then
         sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Partition Name: ${p}</code>" > /dev/null
         mkdir "$p" || rm -rf "${p:?}"/*
-        7z x "$p".img -y -o"$p"/ || {
-            rm -rf "${p}"/*
-            ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
+        # Try to extract images via fsck.erofs
+        echo "Trying to extract $p partition via fsck.erofs."
+        ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
+            # Uses 7z if images could not be extracted via fsck.erofs
+            echo "Extraction via fsck.erofs failed, extracting $p partition via 7z"
+            7z x "$p".img -y -o"$p"/ || {
+                # Uses mount loop if extraction via 7z failed
+                rm -rf "${p}"/*
+                echo "Couldn't extract $p partition via 7z. Using mount loop"
                 mount -o loop -t auto "$p".img "$p"
                 mkdir "${p}_"
                 cp -rf "${p}/*" "${p}_"
