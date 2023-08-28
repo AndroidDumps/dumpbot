@@ -113,9 +113,6 @@ else
     elif [[ $URL =~ mega.nz ]]; then
         megadl "'$URL'" || downloadError
     else
-        if [[ $URL =~ ^https://1drv.ms.+$ ]]; then
-            URL=${URL/ms/ws}
-        fi
         # Try to download certain URLs with axel first
         if [[ $URL =~ ^.+(ota\.d\.miui\.com|otafsg|h2os|oxygenos\.oneplus\.net|dl.google|android.googleapis|ozip)(.+)?$ ]]; then
             axel -q -a -n64 "$URL" || {
