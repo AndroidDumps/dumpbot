@@ -184,8 +184,6 @@ bash ~/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
     terminate 1
 }
 
-rm -fv "$FILE"
-
 PARTITIONS=(system systemex system_ext system_other
     vendor cust odm odm_ext oem factory product modem
     xrom oppo_product opproduct reserve india
@@ -220,6 +218,8 @@ for p in "${PARTITIONS[@]}"; do
 done
 
 fi
+
+rm -fv "$FILE"
 
 # clear the last partition status
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}" > /dev/null
