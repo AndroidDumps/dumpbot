@@ -50,8 +50,24 @@ async def dump_main(update: Update, context: ContextTypes.DEFAULT_TYPE, use_alt_
         text=response_text,
     )
 
+
 async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await dump_main(update, context, use_alt_dumper=False)
 
+
 async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await dump_main(update, context, use_alt_dumper=True)
+
+
+async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Please provide a job ID.")
+        return
+
+    job_id = context.args[0]
+    response_message = await utils.cancel_jenkins_job(job_id)
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=response_message)
