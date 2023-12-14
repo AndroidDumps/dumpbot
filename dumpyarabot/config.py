@@ -1,4 +1,5 @@
-from pydantic import AnyHttpUrl, BaseSettings
+from pydantic import AnyHttpUrl
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -11,9 +12,7 @@ class Settings(BaseSettings):
     SUDO_USERS: list[int] = []
 
     ALLOWED_CHATS: list[int]
-
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 settings = Settings()

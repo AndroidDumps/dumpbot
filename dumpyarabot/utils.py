@@ -17,7 +17,7 @@ async def call_jenkins(args: schemas.DumpArguments) -> str:
             params=(
                 ("token", settings.JENKINS_TOKEN),
                 ("URL", args.url),
-                ("USE_ALT_DUMPER", args.use_alt_dumper)
+                ("USE_ALT_DUMPER", args.use_alt_dumper),
             ),
         )
         if response.status_code in (200, 201):
@@ -35,10 +35,9 @@ async def cancel_jenkins_job(job_id: str) -> str:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{settings.JENKINS_URL}/job/dumpyara/{job_id}/stop",
-            headers={"Authorization": f"Bearer {settings.JENKINS_TOKEN}"}
+            headers={"Authorization": f"Bearer {settings.JENKINS_TOKEN}"},
         )
         if response.status_code == 200:
             return f"Job with ID {job_id} has been cancelled."
         else:
             return f"Failed to cancel job with ID {job_id}. Status code: {response.status_code}, Response: {response.text}"
-

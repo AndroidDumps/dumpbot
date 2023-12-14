@@ -1,6 +1,6 @@
 from telegram.ext import ApplicationBuilder, CommandHandler
 
-from dumpyarabot.handlers import dump, dump_alt, cancel_dump
+from dumpyarabot.handlers import cancel_dump, dump, dump_alt
 
 from .config import settings
 

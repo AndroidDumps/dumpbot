@@ -9,7 +9,9 @@ from dumpyarabot.config import settings
 console = Console()
 
 
-async def dump_main(update: Update, context: ContextTypes.DEFAULT_TYPE, use_alt_dumper: bool = False):
+async def dump_main(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, use_alt_dumper: bool = False
+):
     # Just here to keep mypy happy
     if update.effective_chat is None or update.effective_message is None:
         raise Exception("What happened here?")
@@ -62,12 +64,12 @@ async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Please provide a job ID.")
+            chat_id=update.effective_chat.id, text="Please provide a job ID."
+        )
         return
 
     job_id = context.args[0]
     response_message = await utils.cancel_jenkins_job(job_id)
     await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=response_message)
+        chat_id=update.effective_chat.id, text=response_message
+    )
