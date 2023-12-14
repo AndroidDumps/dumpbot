@@ -11,9 +11,13 @@ console = Console()
 
 async def dump_main(
     update: Update, context: ContextTypes.DEFAULT_TYPE, use_alt_dumper: bool = False
-):
+) -> None:
     # Just here to keep mypy happy
-    if update.effective_chat is None or update.effective_message is None:
+    if (
+        update.effective_chat is None
+        or update.effective_message is None
+        or update.effective_user is None
+    ):
         raise Exception("What happened here?")
 
     # Ensure it can only be used in the correct group
@@ -26,7 +30,7 @@ async def dump_main(
         return
 
     # Ensure that we had some arguments passed
-    if context.args is None or len(context.args) < 1:
+    if not context.args:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             reply_to_message_id=update.effective_message.id,
@@ -53,23 +57,45 @@ async def dump_main(
     )
 
 
-async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await dump_main(update, context, use_alt_dumper=False)
 
 
-async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await dump_main(update, context, use_alt_dumper=True)
 
 
-async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
+async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Just here to keep mypy happy
+    if (
+        update.effective_chat is None
+        or update.effective_message is None
+        or update.effective_user is None
+    ):
+        raise Exception("What happened here?")
+
+    if update.effective_user not in (
+        admin.user for admin in await update.effective_chat.get_administrators()
+    ):
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, text="Please provide a job ID."
+            chat_id=update.effective_chat.id,
+            reply_to_message_id=update.effective_message.id,
+            text="You can't use this here",
+        )
+        return
+
+    if not context.args:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            reply_to_message_id=update.effective_message.id,
+            text="Please provide a job ID.",
         )
         return
 
     job_id = context.args[0]
     response_message = await utils.cancel_jenkins_job(job_id)
     await context.bot.send_message(
-        chat_id=update.effective_chat.id, text=response_message
+        chat_id=update.effective_chat.id,
+        reply_to_message_id=update.effective_message.id,
+        text=response_message,
     )
