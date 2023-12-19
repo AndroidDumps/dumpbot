@@ -38,6 +38,7 @@ async def cancel_jenkins_job(job_id: str) -> str:
         response = await client.post(
             f"{settings.JENKINS_URL}/job/dumpyara/{job_id}/stop",
             auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
+            follow_redirects=True,
         )
         if response.status_code == 200:
             return f"Job with ID {job_id} has been cancelled."
