@@ -74,8 +74,12 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ):
         raise Exception("What happened here?")
 
-    if update.effective_user not in (
-        admin.user for admin in await update.effective_chat.get_administrators()
+    if (
+        update.effective_chat.id not in settings.ALLOWED_CHATS
+        or update.effective_user
+        not in (
+            admin.user for admin in await update.effective_chat.get_administrators()
+        )
     ):
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
