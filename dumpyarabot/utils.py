@@ -42,5 +42,14 @@ async def cancel_jenkins_job(job_id: str) -> str:
         )
         if response.status_code == 200:
             return f"Job with ID {job_id} has been cancelled."
-        else:
-            return f"Failed to cancel job with ID {job_id}. Status code: {response.status_code}, Response: {response.text}"
+        elif response.status_code == 404:
+            response = await client.post(
+                f"{settings.JENKINS_URL}/queue/cancelItem",
+                params=httpx.QueryParams({"id": job_id}),
+                auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
+                follow_redirects=True,
+            )
+            if response.status_code == 204:
+                return f"Job with ID {job_id} has been removed from the queue."
+        print(response.text)
+        return f"Failed to cancel job with ID {job_id}. Status code: {response.status_code}. Check stdout for more details."
