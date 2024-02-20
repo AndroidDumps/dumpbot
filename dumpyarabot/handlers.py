@@ -58,11 +58,11 @@ async def dump_main(
 
 
 async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await dump_main(update, context, use_alt_dumper=False)
+    await dump_main(update, context, use_alt_dumper=True)
 
 
 async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await dump_main(update, context, use_alt_dumper=True)
+    await dump_main(update, context, use_alt_dumper=False)
 
 
 async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
