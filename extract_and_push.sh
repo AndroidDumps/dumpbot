@@ -564,6 +564,7 @@ tg_html_text="<b>Brand: $brand</b>
 <b>Device: $codename</b>
 <b>Version: $release</b>
 <b>Fingerprint: $fingerprint</b>
+<b>Platform: $platform</b>
 <b>Git link:</b>
 <a href=\"$commit_link\">Commit</a>
 <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">$codename</a>"
