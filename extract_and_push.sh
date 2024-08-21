@@ -72,7 +72,7 @@ urlEncode() {
     printf '\n'
 }
 
-curl --compressed --fail --silent --location "https://$GITLAB_SERVER" > /dev/null || {
+curl --compressed --fail-with-body --silent --location "https://$GITLAB_SERVER" > /dev/null || {
     sendTG normal "Can't access $GITLAB_SERVER, cancelling job!"
     exit 1
 }
@@ -511,9 +511,9 @@ sudo chmod -R u+rwX ./*
 find . -type f -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
 
 # Check whether the subgroup exists or not
-if ! group_id_json="$(curl --compressed -s -H "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups/$ORG%2f$repo_subgroup" -s --fail)"; then
+if ! group_id_json="$(curl --compressed -sH --fail-with-body "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups/$ORG%2f$repo_subgroup")"; then
     echo "Response: $group_id_json"
-    if ! group_id_json="$(curl --compressed -H "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups" -X POST -F name="${repo_subgroup^}" -F parent_id=64 -F path="${repo_subgroup}" -F visibility=public --silent --fail)"; then
+    if ! group_id_json="$(curl --compressed -sH --fail-with-body "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups" -X POST -F name="${repo_subgroup^}" -F parent_id=64 -F path="${repo_subgroup}" -F visibility=public)"; then
         echo "Creating subgroup for $repo_subgroup failed"
         echo "Response: $group_id_json"
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Creating subgroup for $repo_subgroup failed!</code>" > /dev/null
@@ -527,9 +527,9 @@ if ! group_id="$(jq '.id' -e <<< "${group_id_json}")"; then
 fi
 
 # Create the repo if it doesn't exist
-project_id_json="$(curl --compressed --silent -H "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects/$ORG%2f$repo_subgroup%2f$repo_name")"
+project_id_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects/$ORG%2f$repo_subgroup%2f$repo_name")"
 if ! project_id="$(jq .id -e <<< "${project_id_json}")"; then
-    project_id_json="$(curl --compressed --silent -H "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects" -X POST -F namespace_id="$group_id" -F name="$repo_name" -F visibility=public)"
+    project_id_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects" -X POST -F namespace_id="$group_id" -F name="$repo_name" -F visibility=public)"
     if ! project_id="$(jq .id -e <<< "${project_id_json}")"; then
         echo "Could get get project id"
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Could not get project id!</code>" > /dev/null
@@ -537,7 +537,7 @@ if ! project_id="$(jq .id -e <<< "${project_id_json}")"; then
     fi
 fi
 
-branch_json="$(curl --compressed --silent -H "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects/$project_id/repository/branches/$branch")"
+branch_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects/$project_id/repository/branches/$branch")"
 [[ "$(jq -r '.name' -e <<< "${branch_json}")" == "$branch" ]] && {
     echo "$branch already exists in $repo"
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>$branch already exists in</code> <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">$repo</a>!" > /dev/null
