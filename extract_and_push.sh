@@ -106,10 +106,10 @@ else
     }
     if [[ $URL =~ drive.google.com ]]; then
         echo "Google Drive URL detected"
-        python3 -m gdown ${URL} --fuzzy
+        python3 -m gdown ${URL} --fuzzy || downloadError
     elif [[ $URL =~ mediafire.com ]]; then
         echo "Mediafire URL detected"
-        python3 -m mediafire-dl ${URR}
+        python3 -m mediafire-dl ${URR} || downloadError
     elif [[ $URL =~ mega.nz ]]; then
         megadl "'$URL'" || downloadError
     else
