@@ -113,22 +113,11 @@ else
     elif [[ $URL =~ mega.nz ]]; then
         megadl "'$URL'" || downloadError
     else
-        # Try to download certain URLs with axel first
-        if [[ $URL =~ ^.+(ota\.d\.miui\.com|otafsg|h2os|oxygenos\.oneplus\.net|dl.google|android.googleapis|ozip)(.+)?$ ]]; then
-            axel -q -a -n64 "$URL" || {
-                # Try to download with aria, else wget. Clean the directory each time.
-                aria2c -q -s16 -x16 "${URL}" || {
-                    rm -fv ./*
-                    wget "${URL}" || downloadError
-                }
-            }
-        else
-            # Try to download with aria, else wget. Clean the directory each time.
-            aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
-                rm -fv ./*
-                wget --no-check-certificate "${URL}" || downloadError
-            }
-        fi
+        # Try to download with aria, else wget. Clean the directory each time.
+        aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
+            rm -fv ./*
+            wget --no-check-certificate "${URL}" || downloadError
+        }
     fi
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloaded the file.</code>" > /dev/null
 fi
