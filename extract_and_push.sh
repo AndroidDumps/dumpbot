@@ -106,7 +106,7 @@ else
     }
     if [[ $URL =~ drive.google.com ]]; then
         echo "Google Drive URL detected"
-        python3 -m gdown ${URL} --fuzzy || downloadError
+        python3 -m gdown -q ${URL} --fuzzy || downloadError
     elif [[ $URL =~ mediafire.com ]]; then
         echo "Mediafire URL detected"
         python3 -m mediafire-dl ${URR} || downloadError
