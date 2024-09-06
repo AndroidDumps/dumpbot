@@ -109,7 +109,7 @@ else
         python3 -m gdown -q ${URL} --fuzzy || downloadError
     elif [[ $URL =~ mediafire.com ]]; then
         echo "Mediafire URL detected"
-        python3 -m mediafire-dl ${URR} || downloadError
+        python3 -m mediafire-dl ${URL} || downloadError
     elif [[ $URL =~ mega.nz ]]; then
         megadl "'$URL'" || downloadError
     else
