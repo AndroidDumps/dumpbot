@@ -106,12 +106,12 @@ else
     }
     if [[ $URL =~ drive.google.com ]]; then
         echo "Google Drive URL detected"
-        python3 -m gdown -q ${URL} --fuzzy || downloadError
+        python3 -m gdown -q "${URL}" --fuzzy || downloadError
     elif [[ $URL =~ mediafire.com ]]; then
         echo "Mediafire URL detected"
-        python3 -m mediafire-dl ${URL} || downloadError
+        python3 -m mediafire-dl "${URL}" || downloadError
     elif [[ $URL =~ mega.nz ]]; then
-        megadl "'$URL'" || downloadError
+        megadl "${URL}" || downloadError
     else
         # Try to download with aria, else wget. Clean the directory each time.
         aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
