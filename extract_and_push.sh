@@ -99,26 +99,31 @@ else
     fi
 
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloading the file..</code>" > /dev/null
+
+    # downloadError: Kill the script in case downloading failed
     downloadError() {
         echo "Download failed. Exiting."
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to download the file.</code>" > /dev/null
         terminate 1
     }
-    if [[ $URL =~ drive.google.com ]]; then
-        echo "Google Drive URL detected"
-        python3 -m gdown -q "${URL}" --fuzzy || downloadError
-    elif [[ $URL =~ mediafire.com ]]; then
-        echo "Mediafire URL detected"
-        python3 -m mediafire-dl "${URL}" || downloadError
-    elif [[ $URL =~ mega.nz ]]; then
-        megadl "${URL}" || downloadError
-    else
-        # Try to download with aria, else wget. Clean the directory each time.
-        aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
-            rm -fv ./*
-            wget --no-check-certificate "${URL}" || downloadError
-        }
-    fi
+
+    # Properly check for different hosting websties.
+    case ${URL} in
+        *drive.google.com*)
+            python3 -m gdown -q "${URL}" --fuzzy || downloadError
+        ;;
+        *mediafire.com*)
+            python3 -m mediafire-dl "${URL}" || downloadError
+        ;;
+        *mega.nz*)
+            megadl "${URL}" || downloadError
+        *)
+            aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
+                rm -fv ./*
+                wget --no-check-certificate "${URL}" || downloadError
+            }
+        ;;
+    esac
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloaded the file.</code>" > /dev/null
 fi
 
