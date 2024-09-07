@@ -242,13 +242,13 @@ if [[ -f "${PWD}/boot.img" ]]; then
     mkdir -pv ${PWD}/boot/dtb
 
     # Unpack 'boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${PWD}/boot.img" -o "${PWD}/boot" > /dev/null
+    ${UNPACKBOOTIMG} -i "${PWD}/boot.img" -o "${PWD}/boot" >> ${PWD}/boot/boot.img-info
 
     # Extract device-tree blobs from 'boot.img'
     extract-dtb "${PWD}/boot.img" -o "${PWD}/boot/dtb" > /dev/null 
 
     # Do not run 'dtc' if no DTB was found
-    if [ $(ls ${PWD}/boot/dtb) ]; then
+    if [ $(find ${PWD}/boot/dtb) ]; then
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${PWD}/boot/dtb"); do
             dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
@@ -265,13 +265,19 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
     # ELF
     python3 "${HOME}"/vmlinux-to-elf/vmlinux-to-elf ./boot/boot.img-kernel boot.elf
+
+    # Delete every file which is empty or with text
+    find ${PWD}/boot/. -type f -empty -print -delete
+    for file in $(find . -name "boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
+        rm -rf "${file}"
+    done
 fi
 if [[ -f "${PWD}/vendor_boot.img" ]]; then
     mkdir -pv ${PWD}/vendor_boot/dtb
     mkdir -pv ${PWD}/vendor_boot/dts
 
     # Unpack 'vendor_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot" > /dev/null
+    ${UNPACKBOOTIMG} -i "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot" >> ${PWD}/boot/vendor_boot.img-info
 
     # Extract device-tree blobs from 'vendor_boot.img'
     extract-dtb "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot/dtb" > /dev/null
@@ -279,6 +285,12 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     # Decompile '.dtb' to '.dts'
     for dtb in $(find "${PWD}/vendor_boot/dtb"); do
         dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/vendor_boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+    done
+
+    # Delete every file which is empty or with text
+    find ${PWD}/vendor_boot/. -type f -empty -print -delete
+    for file in $(find . -name "vendor_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
+        rm -rf "${file}"
     done
 fi
 if [[ -f "${PWD}/dtbo.img" ]]; then
