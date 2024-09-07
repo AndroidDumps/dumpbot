@@ -160,7 +160,6 @@ else
 
 EXTERNAL_TOOLS=(
     https://github.com/AndroidDumps/Firmware_extractor
-    https://github.com/xiaolu/mkbootimg_tools
     https://github.com/marin-m/vmlinux-to-elf
 )
 
@@ -237,38 +236,69 @@ for image in vendor_boot.img boot.img dtbo.img; do
 done
 
 # Extract bootimage and dtbo
-if [[ -f "boot.img" ]]; then
-    mkdir -v bootdts
-    ~/mkbootimg_tools/mkboot ./boot.img ./bootimg > /dev/null
-    extract-dtb ./boot.img -o ./bootimg > /dev/null
-    find bootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" -printf "%P\n" \;
+UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/Linux/bin/unpackbootimg"
+if [[ -f "${PWD}/boot.img" ]]; then
+    mkdir -pv ${PWD}/boot/dts
+    mkdir -pv ${PWD}/boot/dtb
+
+    # Unpack 'boot.img' through 'unpackbootimg'
+    ${UNPACKBOOTIMG} -i "${PWD}/boot.img" -o "${PWD}/boot" > /dev/null
+
+    # Extract device-tree blobs from 'boot.img'
+    extract-dtb "${PWD}/boot.img" -o "${PWD}/boot/dtb" > /dev/null 
+
+    # Decompile '.dtb' to '.dts'
+    for dtb in $(find "${PWD}/boot/dtb"); do
+        dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+    done
+
     # Extract ikconfig
     if [[ "$(command -v extract-ikconfig)" ]]; then
         extract-ikconfig boot.img > ikconfig
     fi
+
     # Kallsyms
-    python3 ~/vmlinux-to-elf/kallsyms-finder ./bootimg/kernel > kallsyms.txt
+    python3 "${HOME}"/vmlinux-to-elf/kallsyms-finder ./boot/boot.img-kernel > kallsyms.txt
+
     # ELF
-    python3 ~/vmlinux-to-elf/vmlinux-to-elf ./bootimg/kernel boot.elf
+    python3 "${HOME}"/vmlinux-to-elf/vmlinux-to-elf ./boot/boot.img-kernel boot.elf
 fi
-if [[ -f "vendor_boot.img" ]]; then
-    mkdir -v vbootdts
-    ~/mkbootimg_tools/mkboot ./vendor_boot.img ./vbootimg > /dev/null
-    extract-dtb ./boot.img -o ./vbootimg > /dev/null
-    find vbootimg/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o bootdts/"$(echo {} | sed 's/\.dtb/.dts/')" -printf "%P\n" \;
+if [[ -f "${PWD}/vendor_boot.img" ]]; then
+    mkdir -pv ${PWD}/vendor_boot/dtb
+    mkdir -pv ${PWD}/vendor_boot/dts
+
+    # Unpack 'vendor_boot.img' through 'unpackbootimg'
+    ${UNPACKBOOTIMG} -i "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot" > /dev/null
+
+    # Extract device-tree blobs from 'vendor_boot.img'
+    extract-dtb "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot/dtb" > /dev/null
+
+    # Decompile '.dtb' to '.dts'
+    for dtb in $(find "${PWD}/vendor_boot/dtb"); do
+        dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/vendor_boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+    done
+
     # Extract ikconfig
     if [[ "$(command -v extract-ikconfig)" ]]; then
         extract-ikconfig boot.img > ikconfig
     fi
+
     # Kallsyms
-    python3 ~/vmlinux-to-elf/kallsyms-finder ./vbootimg/kernel > vkallsyms.txt
+    python3 "${HOME}"/vmlinux-to-elf/kallsyms-finder ./vendor_boot/vendor-boot.img-kernel > vkallsyms.txt
+
     # ELF
-    python3 ~/vmlinux-to-elf/vmlinux-to-elf ./vbootimg/kernel vboot.elf
+    python3 "${HOME}"/vmlinux-to-elf/vmlinux-to-elf ./vendor_boot/vendor-boot.img-kernel vboot.elf
 fi
-if [[ -f "dtbo.img" ]]; then
-    mkdir -v dtbodts
-    extract-dtb ./dtbo.img -o ./dtbo > /dev/null
-    find dtbo/ -name '*.dtb' -type f -exec dtc -q -I dtb -O dts {} -o dtbodts/"$(echo {} | sed 's/\.dtb/.dts/')" -printf "%P\n" \;
+if [[ -f "${PWD}/dtbo.img" ]]; then
+    mkdir -pv "${PWD}/dtbo/dts"
+
+    # Extract device-tree blobs from 'dtbo.img'
+    extract-dtb "${PWD}/dtbo.img" -o "${PWD}/dtbo" > /dev/null
+
+    # Decompile '.dtb' to '.dts'
+    for dtb in $(find "${PWD}/dtbo"); do
+        dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/dtbo/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+    done
 fi
 
 # Oppo/Realme/OnePlus devices have some images in folders, extract those
