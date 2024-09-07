@@ -247,10 +247,13 @@ if [[ -f "${PWD}/boot.img" ]]; then
     # Extract device-tree blobs from 'boot.img'
     extract-dtb "${PWD}/boot.img" -o "${PWD}/boot/dtb" > /dev/null 
 
-    # Decompile '.dtb' to '.dts'
-    for dtb in $(find "${PWD}/boot/dtb"); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
-    done
+    # Do not run 'dtc' if no DTB was found
+    if [ $(ls ${PWD}/boot/dtb) ]; then
+        # Decompile '.dtb' to '.dts'
+        for dtb in $(find "${PWD}/boot/dtb"); do
+            dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+        done
+    fi
 
     # Extract ikconfig
     if [[ "$(command -v extract-ikconfig)" ]]; then
