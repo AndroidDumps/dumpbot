@@ -117,6 +117,7 @@ else
         ;;
         *mega.nz*)
             megadl "${URL}" || downloadError
+        ;;
         *)
             aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
                 rm -fv ./*
