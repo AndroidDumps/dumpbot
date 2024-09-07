@@ -277,17 +277,6 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     for dtb in $(find "${PWD}/vendor_boot/dtb"); do
         dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/vendor_boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
     done
-
-    # Extract ikconfig
-    if [[ "$(command -v extract-ikconfig)" ]]; then
-        extract-ikconfig boot.img > ikconfig
-    fi
-
-    # Kallsyms
-    python3 "${HOME}"/vmlinux-to-elf/kallsyms-finder ./vendor_boot/vendor-boot.img-kernel > vkallsyms.txt
-
-    # ELF
-    python3 "${HOME}"/vmlinux-to-elf/vmlinux-to-elf ./vendor_boot/vendor-boot.img-kernel vboot.elf
 fi
 if [[ -f "${PWD}/dtbo.img" ]]; then
     mkdir -pv "${PWD}/dtbo/dts"
