@@ -255,9 +255,9 @@ if [[ -f "${PWD}/boot.img" ]]; then
         done
     fi
 
-    # Extract ikconfig
-    if [[ "$(command -v extract-ikconfig)" ]]; then
-        extract-ikconfig boot.img > ikconfig
+    # Extract 'ikconfig'
+    if command -v extract-ikconfig > /dev/null ; then
+        extract-ikconfig ${PWD}/boot.img > ${PWD}/ikconfig
     fi
 
     # Kallsyms
