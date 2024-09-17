@@ -116,7 +116,7 @@ else
            uvx --from git+https://github.com/Juvenal-Yescas/mediafire-dl@5873ecf1601f1cedc10a933a3a00d340d0f02db3 mediafire-dl "${URL}" || downloadError
         ;;
         *mega.nz*)
-            megadl "${URL}" || downloadError
+            megatools dl "${URL}" || downloadError
         ;;
         *)
             aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
