@@ -110,10 +110,10 @@ else
     # Properly check for different hosting websties.
     case ${URL} in
         *drive.google.com*)
-            python3 -m gdown -q "${URL}" --fuzzy || downloadError
+            uvx gdown@5.2.0 -q "${URL}" --fuzzy || downloadError
         ;;
         *mediafire.com*)
-           mediafire-dl "${URL}" || downloadError
+           uvx --from git+https://github.com/Juvenal-Yescas/mediafire-dl@5873ecf1601f1cedc10a933a3a00d340d0f02db3 mediafire-dl "${URL}" || downloadError
         ;;
         *mega.nz*)
             megadl "${URL}" || downloadError
@@ -151,7 +151,7 @@ fi
 if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
 
 sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumpyara.." > /dev/null
-python3 -m dumpyara "${FILE}" -o "${PWD}" || {
+uvx dumpyara@1.0.6 "${FILE}" -o "${PWD}" || {
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
     terminate 1
 }
@@ -489,16 +489,13 @@ platform: ${platform}
 top_codename: ${top_codename}
 is_ab: ${is_ab}"
 
-if python -c "import aospdtgen"; then
-    echo "aospdtgen installed, generating device tree"
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>aospdtgen installed, generating device tree</code>" > /dev/null
-    mkdir -p aosp-device-tree
-    if python3 -m aospdtgen . --output ./aosp-device-tree; then
-        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>AOSP device tree successfully generated.</code>" > /dev/null
-    else
-        echo "Failed to generate AOSP device tree"
-        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree</code>" > /dev/null
-    fi
+sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Generating device tree</code>" > /dev/null
+mkdir -p aosp-device-tree
+if uvx aospdtgen@1.1.1 . --output ./aosp-device-tree; then
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>AOSP device tree successfully generated.</code>" > /dev/null
+else
+    echo "Failed to generate AOSP device tree"
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree</code>" > /dev/null
 fi
 
 # Fix permissions
