@@ -113,7 +113,7 @@ else
             python3 -m gdown -q "${URL}" --fuzzy || downloadError
         ;;
         *mediafire.com*)
-            python3 -m mediafire-dl "${URL}" || downloadError
+           mediafire-dl "${URL}" || downloadError
         ;;
         *mega.nz*)
             megadl "${URL}" || downloadError
