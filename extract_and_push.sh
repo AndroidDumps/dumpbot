@@ -352,6 +352,29 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     done
 fi
 
+# Extract 'init_boot.img'
+if [[ -f "${PWD}/init_boot.img" ]]; then
+    # Set a variable for each path
+    ## Image
+    IMAGE=${PWD}/init_boot.img
+
+    ## Output
+    OUTPUT=${PWD}/init_boot
+
+    # Create necessary directories
+    mkdir -pv "${OUTPUT}/dts"
+    mkdir -pv "${OUTPUT}/dtb"
+
+    # Unpack 'vendor_boot.img' through 'unpackbootimg'
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/init_boot.img-info"
+
+    # Delete every file which is empty or with text
+    find "${OUTPUT}" -type f -empty -print -delete
+    for file in $(find "${OUTPUT}" -name "init_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
+        rm -rf "${file}"
+    done
+fi
+
 # Extract 'dtbo.img'
 if [[ -f "${PWD}/dtbo.img" ]]; then
     # Set a variable for each path
