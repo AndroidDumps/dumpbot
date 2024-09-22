@@ -253,10 +253,6 @@ if [[ -f "${PWD}/boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
-    mkdir -p "${OUTPUT}/ramdisk"
-
-    # Unpack 'boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
 
     # Extract device-tree blobs from 'boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null 
@@ -280,14 +276,22 @@ if [[ -f "${PWD}/boot.img" ]]; then
     # ELF
     python3 "${VMLINUX_TO_ELF}" "${OUTPUT}/boot.img-kernel" boot.elf
 
-    # Decrompress 'boot.img-ramdisk'
-    ## Run only if 'boot.img-ramdisk' is not empty
-    if [ $(file boot.img-ramdisk | grep LZ4) ]; then
-        unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+    # Python rewrite automatically extracts such partitions
+    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+        mkdir -p "${OUTPUT}/ramdisk"
 
-        ## Clean-up
-        rm -rf "${OUTPUT}/ramdisk.lz4"
+        # Unpack 'boot.img' through 'unpackbootimg'
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+
+        # Decrompress 'boot.img-ramdisk'
+        ## Run only if 'boot.img-ramdisk' is not empty
+        if [ $(file boot.img-ramdisk | grep LZ4) ]; then
+            unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
+            7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+
+            ## Clean-up
+            rm -rf "${OUTPUT}/ramdisk.lz4"
+        fi
     fi
 fi
 
@@ -305,9 +309,6 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     mkdir -p "${OUTPUT}/dtb"
     mkdir -p "${OUTPUT}/ramdisk"
 
-    # Unpack 'vendor_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
-
     # Extract device-tree blobs from 'vendor_boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
 
@@ -319,12 +320,20 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
         done
     fi
 
-    # Decrompress 'vendor_boot.img-vendor_ramdisk'
-    unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
-    7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
-    
-    ## Clean-up
-    rm -rf "${OUTPUT}/ramdisk.lz4"
+    # Python rewrite automatically extracts such partitions
+    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+        mkdir -p "${OUTPUT}/ramdisk"
+
+        ## Unpack 'vendor_boot.img' through 'unpackbootimg'
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+
+        # Decrompress 'vendor_boot.img-vendor_ramdisk'
+        unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
+        7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+
+        ## Clean-up
+        rm -rf "${OUTPUT}/ramdisk.lz4"
+    fi
 fi
 
 # Extract 'vendor_kernel_boot.img'
@@ -339,10 +348,6 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
-    mkdir -p "${OUTPUT}/ramdisk"
-
-    # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
 
     # Extract device-tree blobs from 'vendor_kernel_boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
@@ -355,12 +360,20 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
         done
     fi
 
-    # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
-    unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
-    7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
-    
-    ## Clean-up
-    rm -rf "${OUTPUT}/ramdisk.lz4"
+    # Python rewrite automatically extracts such partitions
+    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+        mkdir -p "${OUTPUT}/ramdisk"
+
+        # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+
+        # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
+        unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
+        7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+
+        ## Clean-up
+        rm -rf "${OUTPUT}/ramdisk.lz4"
+    fi
 fi
 
 # Extract 'init_boot.img'
@@ -375,17 +388,21 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
-    mkdir -p "${OUTPUT}/ramdisk"
 
-    # Unpack 'init_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+    # Python rewrite automatically extracts such partitions
+    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+        mkdir -p "${OUTPUT}/ramdisk"
 
-    # Decrompress 'init_boot.img-ramdisk'
-    unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
-    7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
-    
-    ## Clean-up
-    rm -rf "${OUTPUT}/ramdisk.lz4"
+        # Unpack 'init_boot.img' through 'unpackbootimg'
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+
+        # Decrompress 'init_boot.img-ramdisk'
+        unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
+        7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+
+        ## Clean-up
+        rm -rf "${OUTPUT}/ramdisk.lz4"
+    fi
 fi
 
 # Extract 'dtbo.img'
