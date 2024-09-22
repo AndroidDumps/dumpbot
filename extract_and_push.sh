@@ -149,68 +149,68 @@ if [[ ! -f ${FILE} ]]; then
 fi
 
 if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
-
-sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumpyara.." > /dev/null
-uvx dumpyara@1.0.6 "${FILE}" -o "${PWD}" || {
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
-    terminate 1
-}
-
+    sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumpyara.." > /dev/null
+    uvx dumpyara@1.0.6 "${FILE}" -o "${PWD}" || {
+        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
+        terminate 1
+    }
 else
+    EXTERNAL_TOOLS=(
+        https://github.com/AndroidDumps/Firmware_extractor
+        https://github.com/marin-m/vmlinux-to-elf
+    )
 
-EXTERNAL_TOOLS=(
-    https://github.com/AndroidDumps/Firmware_extractor
-    https://github.com/marin-m/vmlinux-to-elf
-)
+    for tool_url in "${EXTERNAL_TOOLS[@]}"; do
+        tool_path="${HOME}/${tool_url##*/}"
+        if ! [[ -d ${tool_path} ]]; then
+            git clone -q "${tool_url}" "${tool_path}"
+        else
+            git -C "${tool_path}" pull
+        fi
+    done
 
-for tool_url in "${EXTERNAL_TOOLS[@]}"; do
-    tool_path="${HOME}/${tool_url##*/}"
-    if ! [[ -d ${tool_path} ]]; then
-        git clone -q "${tool_url}" "${tool_path}"
-    else
-        git -C "${tool_path}" pull
-    fi
-done
+    sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware.." > /dev/null
+    bash ~/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
+        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
+        terminate 1
+    }
 
-sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware.." > /dev/null
-bash ~/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
-    terminate 1
-}
+    PARTITIONS=(system systemex system_ext system_other
+        vendor cust odm odm_ext oem factory product modem
+        xrom oppo_product opproduct reserve india
+        my_preload my_odm my_stock my_operator my_country my_product my_company my_engineering my_heytap
+        my_custom my_manifest my_carrier my_region my_bigball my_version special_preload vendor_dlkm odm_dlkm system_dlkm mi_ext
+    )
 
-PARTITIONS=(system systemex system_ext system_other
-    vendor cust odm odm_ext oem factory product modem
-    xrom oppo_product opproduct reserve india
-    my_preload my_odm my_stock my_operator my_country my_product my_company my_engineering my_heytap
-    my_custom my_manifest my_carrier my_region my_bigball my_version special_preload vendor_dlkm odm_dlkm system_dlkm mi_ext
-)
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting partitions ..</code>" > /dev/null
+    # Extract the images
+    for p in "${PARTITIONS[@]}"; do
+        if [[ -f $p.img ]]; then
+            sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Partition Name: ${p}</code>" > /dev/null
+            mkdir "$p" || rm -rf "${p:?}"/*
 
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting partitions ..</code>" > /dev/null
-# Extract the images
-for p in "${PARTITIONS[@]}"; do
-    if [[ -f $p.img ]]; then
-        sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Partition Name: ${p}</code>" > /dev/null
-        mkdir "$p" || rm -rf "${p:?}"/*
-        # Try to extract images via fsck.erofs
-        echo "Trying to extract $p partition via fsck.erofs."
-        ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
-            # Uses 7z if images could not be extracted via fsck.erofs
-            echo "Extraction via fsck.erofs failed, extracting $p partition via 7z"
-            7z x "$p".img -y -o"$p"/ || {
-                # Uses mount loop if extraction via 7z failed
-                rm -rf "${p}"/*
-                echo "Couldn't extract $p partition via 7z. Using mount loop"
-                mount -o loop -t auto "$p".img "$p"
-                mkdir "${p}_"
-                cp -rf "${p}/*" "${p}_"
-                umount "${p}"
-                mv "${p}_" "${p}"
+            # Try to extract images via 'fsck.erofs'
+            echo "Trying to extract $p partition via fsck.erofs."
+            ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
+
+                # Uses '7z' if images could not be extracted via 'fsck.erofs'
+                echo "Extraction via fsck.erofs failed, extracting $p partition via 7z"
+                7z x "$p".img -y -o"$p"/ || {
+
+                    # Uses mount 'loop' if extraction via '7z' failed
+                    rm -rf "${p}"/*
+                    echo "Couldn't extract $p partition via 7z. Using mount loop"
+                    mount -o loop -t auto "$p".img "$p"
+                    mkdir "${p}_"
+                    cp -rf "${p}/*" "${p}_"
+                    umount "${p}"
+                    mv "${p}_" "${p}"
+                }
             }
-        }
-        rm -fv "$p".img
-    fi
-done
-
+            # Clean-up
+            rm -fv "$p".img
+        fi
+    done
 fi
 
 rm -fv "$FILE"
@@ -635,10 +635,6 @@ else
     echo "Failed to generate AOSP device tree"
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree</code>" > /dev/null
 fi
-
-# Fix permissions
-sudo chown "$(whoami)" ./* -R
-sudo chmod -R u+rwX ./*
 
 # Generate all_files.txt
 find . -type f -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
