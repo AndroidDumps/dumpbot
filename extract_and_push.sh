@@ -256,6 +256,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
     # Extract device-tree blobs from 'boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null 
+    rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Do not run 'dtc' if no DTB was found
     if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
@@ -311,6 +312,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
 
     # Extract device-tree blobs from 'vendor_boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
+    rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
     if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
@@ -351,6 +353,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
 
     # Extract device-tree blobs from 'vendor_kernel_boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
+    rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
     if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
@@ -419,6 +422,7 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
 
     # Extract device-tree blobs from 'dtbo.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null
+    rm -rf "${OUTPUT}/00_kernel"
 
     # Decompile '.dtb' to '.dts'
     for dtb in $(find "${OUTPUT}" -type f); do
