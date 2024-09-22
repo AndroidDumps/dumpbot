@@ -251,6 +251,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/boot.img-info"
@@ -277,6 +278,16 @@ if [[ -f "${PWD}/boot.img" ]]; then
     # ELF
     python3 "${HOME}/vmlinux-to-elf/vmlinux-to-elf" "${OUTPUT}/boot.img-kernel" boot.elf
 
+    # Decrompress 'boot.img-ramdisk'
+    ## Run only if 'boot.img-ramdisk' is not empty
+    if [ $(file boot.img-ramdisk | grep LZ4) ]; then
+        unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
+        7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+
+        ## Clean-up
+        rm -rf "${OUTPUT}/ramdisk.lz4"
+    fi
+
     # Delete every file which is empty or with text
     find "${OUTPUT}" -type f -empty -print -delete
     for file in $(find "${OUTPUT}" -name "boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
@@ -296,6 +307,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'vendor_boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_boot.img-info"
@@ -310,6 +322,13 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
             dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
         done
     fi
+
+    # Decrompress 'vendor_boot.img-vendor_ramdisk'
+    unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
+    7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+    
+    ## Clean-up
+    rm -rf "${OUTPUT}/ramdisk.lz4"
 
     # Delete every file which is empty or with text
     find "${OUTPUT}" -type f -empty -print -delete
@@ -330,6 +349,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_kernel_boot.img-info"
@@ -344,6 +364,13 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
             dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
         done
     fi
+
+    # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
+    unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
+    7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+    
+    ## Clean-up
+    rm -rf "${OUTPUT}/ramdisk.lz4"
 
     # Delete every file which is empty or with text
     find "${OUTPUT}" -type f -empty -print -delete
@@ -364,9 +391,17 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts"
     mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'init_boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/init_boot.img-info"
+
+    # Decrompress 'init_boot.img-ramdisk'
+    unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
+    7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+    
+    ## Clean-up
+    rm -rf "${OUTPUT}/ramdisk.lz4"
 
     # Delete every file which is empty or with text
     find "${OUTPUT}" -type f -empty -print -delete
