@@ -235,23 +235,34 @@ for image in vendor_boot.img boot.img dtbo.img; do
     fi
 done
 
-# Extract bootimage and dtbo
+# Extract kernel, device-tree blobs [...]
+## Set commonly used tools
 UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/Linux/bin/unpackbootimg"
+
+# Extract 'boot.img'
 if [[ -f "${PWD}/boot.img" ]]; then
-    mkdir -pv "${PWD}"/boot/dts
-    mkdir -pv "${PWD}"/boot/dtb
+    # Set a variable for each path
+    ## Image
+    IMAGE=${PWD}/boot.img
+
+    ## Output
+    OUTPUT=${PWD}/boot
+
+    # Create necessary directories
+    mkdir -pv "${OUTPUT}/dts"
+    mkdir -pv "${OUTPUT}/dtb"
 
     # Unpack 'boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${PWD}/boot.img" -o "${PWD}/boot" >> "${PWD}"/boot/boot.img-info
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/boot.img-info"
 
     # Extract device-tree blobs from 'boot.img'
-    extract-dtb "${PWD}/boot.img" -o "${PWD}/boot/dtb" > /dev/null 
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null 
 
     # Do not run 'dtc' if no DTB was found
-    if [ "$(find "${PWD}"/boot/dtb)" ]; then
+    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
         # Decompile '.dtb' to '.dts'
-        for dtb in $(find "${PWD}/boot/dtb"); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+        for dtb in $(find "${PWD}/boot/dtb" -type f); do
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
         done
     fi
 
@@ -261,47 +272,70 @@ if [[ -f "${PWD}/boot.img" ]]; then
     fi
 
     # Kallsyms
-    python3 "${HOME}"/vmlinux-to-elf/kallsyms-finder ./boot/boot.img-kernel > kallsyms.txt
+    python3 "${HOME}/vmlinux-to-elf/kallsyms-finder" "${OUTPUT}/boot.img-kernel" > kallsyms.txt
 
     # ELF
-    python3 "${HOME}"/vmlinux-to-elf/vmlinux-to-elf ./boot/boot.img-kernel boot.elf
+    python3 "${HOME}/vmlinux-to-elf/vmlinux-to-elf" "${OUTPUT}/boot.img-kernel" boot.elf
 
     # Delete every file which is empty or with text
-    find "${PWD}"/boot/. -type f -empty -print -delete
-    for file in $(find . -name "boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
+    find "${OUTPUT}" -type f -empty -print -delete
+    for file in $(find "${OUTPUT}" -name "boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
         rm -rf "${file}"
     done
 fi
+
+# Extract 'vendor_boot.img'
 if [[ -f "${PWD}/vendor_boot.img" ]]; then
-    mkdir -pv "${PWD}"/vendor_boot/dtb
-    mkdir -pv "${PWD}"/vendor_boot/dts
+    # Set a variable for each path
+    ## Image
+    IMAGE=${PWD}/vendor_boot.img
+
+    ## Output
+    OUTPUT=${PWD}/vendor_boot
+
+    # Create necessary directories
+    mkdir -pv "${OUTPUT}/dts"
+    mkdir -pv "${OUTPUT}/dtb"
 
     # Unpack 'vendor_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot" >> "${PWD}"/boot/vendor_boot.img-info
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_boot.img-info"
 
     # Extract device-tree blobs from 'vendor_boot.img'
-    extract-dtb "${PWD}/vendor_boot.img" -o "${PWD}/vendor_boot/dtb" > /dev/null
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
 
     # Decompile '.dtb' to '.dts'
-    for dtb in $(find "${PWD}/vendor_boot/dtb"); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/vendor_boot/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
-    done
+    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+        # Decompile '.dtb' to '.dts'
+        for dtb in $(find "${OUTPUT}/dtb" -type f); do
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+        done
+    fi
 
     # Delete every file which is empty or with text
-    find "${PWD}"/vendor_boot/. -type f -empty -print -delete
-    for file in $(find . -name "vendor_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
+    find "${OUTPUT}" -type f -empty -print -delete
+    for file in $(find "${OUTPUT}" -name "vendor_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
         rm -rf "${file}"
     done
 fi
+
+# Extract 'dtbo.img'
 if [[ -f "${PWD}/dtbo.img" ]]; then
-    mkdir -pv "${PWD}/dtbo/dts"
+    # Set a variable for each path
+    ## Image
+    IMAGE=${PWD}/dtbo.img
+
+    ## Output
+    OUTPUT=${PWD}/dtbo
+
+    # Create necessary directories
+    mkdir -pv "${OUTPUT}/dts"
 
     # Extract device-tree blobs from 'dtbo.img'
-    extract-dtb "${PWD}/dtbo.img" -o "${PWD}/dtbo" > /dev/null
+    extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null
 
     # Decompile '.dtb' to '.dts'
-    for dtb in $(find "${PWD}/dtbo"); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${PWD}/dtbo/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+    for dtb in $(find "${OUTPUT}" -type f); do
+        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
     done
 fi
 
