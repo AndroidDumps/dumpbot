@@ -256,7 +256,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
     mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/boot.img-info"
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
 
     # Extract device-tree blobs from 'boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null 
@@ -289,12 +289,6 @@ if [[ -f "${PWD}/boot.img" ]]; then
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
     fi
-
-    # Delete every file which is empty or with text
-    find "${OUTPUT}" -type f -empty -print -delete
-    for file in $(find "${OUTPUT}" -name "boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
-        rm -rf "${file}"
-    done
 fi
 
 # Extract 'vendor_boot.img'
@@ -312,7 +306,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'vendor_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_boot.img-info"
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
 
     # Extract device-tree blobs from 'vendor_boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
@@ -331,12 +325,6 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     
     ## Clean-up
     rm -rf "${OUTPUT}/ramdisk.lz4"
-
-    # Delete every file which is empty or with text
-    find "${OUTPUT}" -type f -empty -print -delete
-    for file in $(find "${OUTPUT}" -name "vendor_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
-        rm -rf "${file}"
-    done
 fi
 
 # Extract 'vendor_kernel_boot.img'
@@ -354,7 +342,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_kernel_boot.img-info"
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
 
     # Extract device-tree blobs from 'vendor_kernel_boot.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
@@ -373,12 +361,6 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     
     ## Clean-up
     rm -rf "${OUTPUT}/ramdisk.lz4"
-
-    # Delete every file which is empty or with text
-    find "${OUTPUT}" -type f -empty -print -delete
-    for file in $(find ${OUTPUT} -name "vendor_kernel_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
-        rm -rf "${file}"
-    done
 fi
 
 # Extract 'init_boot.img'
@@ -396,7 +378,7 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     mkdir -p "${OUTPUT}/ramdisk"
 
     # Unpack 'init_boot.img' through 'unpackbootimg'
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/init_boot.img-info"
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
 
     # Decrompress 'init_boot.img-ramdisk'
     unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
@@ -404,12 +386,6 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     
     ## Clean-up
     rm -rf "${OUTPUT}/ramdisk.lz4"
-
-    # Delete every file which is empty or with text
-    find "${OUTPUT}" -type f -empty -print -delete
-    for file in $(find "${OUTPUT}" -name "init_boot.img-*" -exec file {} \; | grep ASCII | sed 's/:.*//'); do
-        rm -rf "${file}"
-    done
 fi
 
 # Extract 'dtbo.img'
