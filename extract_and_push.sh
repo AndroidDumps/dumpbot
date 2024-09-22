@@ -272,10 +272,10 @@ if [[ -f "${PWD}/boot.img" ]]; then
     fi
 
     # Kallsyms
-    python3 "${KALLSYMS_FINDER}" "${OUTPUT}/boot.img-kernel" > kallsyms.txt
+    python3 "${KALLSYMS_FINDER}" "${IMAGE}" > kallsyms.txt
 
     # ELF
-    python3 "${VMLINUX_TO_ELF}" "${OUTPUT}/boot.img-kernel" boot.elf
+    python3 "${VMLINUX_TO_ELF}" "${IMAGE}" boot.elf
 
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
