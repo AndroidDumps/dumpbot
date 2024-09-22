@@ -249,8 +249,8 @@ if [[ -f "${PWD}/boot.img" ]]; then
     OUTPUT=${PWD}/boot
 
     # Create necessary directories
-    mkdir -pv "${OUTPUT}/dts"
-    mkdir -pv "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts"
+    mkdir -p "${OUTPUT}/dtb"
 
     # Unpack 'boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/boot.img-info"
@@ -294,8 +294,8 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     OUTPUT=${PWD}/vendor_boot
 
     # Create necessary directories
-    mkdir -pv "${OUTPUT}/dts"
-    mkdir -pv "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts"
+    mkdir -p "${OUTPUT}/dtb"
 
     # Unpack 'vendor_boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_boot.img-info"
@@ -328,8 +328,8 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     OUTPUT=${PWD}/vendor_kernel_boot
 
     # Create necessary directories
-    mkdir -pv "${OUTPUT}/dts"
-    mkdir -pv "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts"
+    mkdir -p "${OUTPUT}/dtb"
 
     # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/vendor_kernel_boot.img-info"
@@ -362,8 +362,8 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     OUTPUT=${PWD}/init_boot
 
     # Create necessary directories
-    mkdir -pv "${OUTPUT}/dts"
-    mkdir -pv "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts"
+    mkdir -p "${OUTPUT}/dtb"
 
     # Unpack 'init_boot.img' through 'unpackbootimg'
     ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" >> "${OUTPUT}/init_boot.img-info"
@@ -385,7 +385,7 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
     OUTPUT=${PWD}/dtbo
 
     # Create necessary directories
-    mkdir -pv "${OUTPUT}/dts"
+    mkdir -p "${OUTPUT}/dts"
 
     # Extract device-tree blobs from 'dtbo.img'
     extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null
