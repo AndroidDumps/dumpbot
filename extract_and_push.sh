@@ -238,6 +238,8 @@ done
 # Extract kernel, device-tree blobs [...]
 ## Set commonly used tools
 UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/Linux/bin/unpackbootimg"
+KALLSYMS_FINDER="${HOME}/vmlinux-to-elf/kallsyms-finder"
+VMLINUX_TO_ELF="${HOME}/vmlinux-to-elf/vmlinux-to-elf"
 
 # Extract 'boot.img'
 if [[ -f "${PWD}/boot.img" ]]; then
@@ -273,10 +275,10 @@ if [[ -f "${PWD}/boot.img" ]]; then
     fi
 
     # Kallsyms
-    python3 "${HOME}/vmlinux-to-elf/kallsyms-finder" "${OUTPUT}/boot.img-kernel" > kallsyms.txt
+    python3 "${KALLSYMS_FINDER}" "${OUTPUT}/boot.img-kernel" > kallsyms.txt
 
     # ELF
-    python3 "${HOME}/vmlinux-to-elf/vmlinux-to-elf" "${OUTPUT}/boot.img-kernel" boot.elf
+    python3 "${VMLINUX_TO_ELF}" "${OUTPUT}/boot.img-kernel" boot.elf
 
     # Decrompress 'boot.img-ramdisk'
     ## Run only if 'boot.img-ramdisk' is not empty
