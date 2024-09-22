@@ -224,7 +224,7 @@ ls system/build*.prop 2> /dev/null || ls system/system/build*.prop 2> /dev/null 
     terminate 1
 }
 
-for image in vendor_boot.img boot.img dtbo.img; do
+for image in init_boot.img vendor_kernel_boot.img vendor_boot.img boot.img dtbo.img; do
     if [[ ! -f ${image} ]]; then
         x=$(find . -type f -name "${image}")
         if [[ -n $x ]]; then
