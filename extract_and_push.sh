@@ -195,9 +195,9 @@ else
     for tool_url in "${EXTERNAL_TOOLS[@]}"; do
         tool_path="${HOME}/${tool_url##*/}"
         if ! [[ -d ${tool_path} ]]; then
-            git clone -q "${tool_url}" "${tool_path}"
+            git clone -q "${tool_url}" "${tool_path}" >> /dev/null 2>&1
         else
-            git -C "${tool_path}" pull
+            git -C "${tool_path}" pull >> /dev/null 2>&1  
         fi
     done
 
