@@ -749,7 +749,7 @@ tg_html_text="<b>Brand</b>: <code>$brand</code>
 <b>Version</b>: <code>$release</code>
 <b>Fingerprint</b>: <code>$fingerprint</code>
 <b>Platform</b>: <code>$platform</code>
-<a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">Repository</a>${link} | <a href=\"$commit_link\">Commit</a>$link"
+<a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">Repository</a> | <a href=\"$commit_link\">Commit</a>$link"
 
 # Send message to Telegram channel
 curl --compressed -s "https://api.telegram.org/bot${API_KEY}/sendmessage" --data "text=${tg_html_text}&chat_id=@android_dumps&parse_mode=HTML&disable_web_page_preview=True" > /dev/null
