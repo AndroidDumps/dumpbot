@@ -48,9 +48,12 @@ sendTG_edit_wrapper() {
 terminate() {
     if [[ ${1:?} == "0" ]]; then
         local string="<b>done</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)"
-    else
+    elif [[ ${1:?} == "1" ]]; then
         local string="<b>failed!</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)
 View <a href=\"${BUILD_URL}consoleText\">console logs</a> for more."
+    else
+        local string="<b>aborted!</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)
+Branch already exists on <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">GitLab</a>."
     fi
     sendTG reply "${MESSAGE_ID}" "<b>Job</b> ${string}"
     exit "${1:?}"
@@ -171,7 +174,7 @@ else
     done
 
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware.." > /dev/null
-    bash ~/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
+    bash ${HOME}/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
         terminate 1
     }
@@ -192,7 +195,7 @@ else
 
             # Try to extract images via 'fsck.erofs'
             echo "Trying to extract $p partition via fsck.erofs."
-            ~/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
+            ${HOME}/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
 
                 # Uses '7zz' if images could not be extracted via 'fsck.erofs'
                 echo "Extraction via fsck.erofs failed, extracting $p partition via 7zz"
@@ -692,7 +695,7 @@ branch_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "ht
 [[ "$(jq -r '.name' -e <<< "${branch_json}")" == "$branch" ]] && {
     echo "$branch already exists in $repo"
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>$branch already exists in</code> <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">$repo</a>!" > /dev/null
-    terminate 0
+    terminate 2
 }
 
 # Add, commit, and push after filtering out certain files
