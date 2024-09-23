@@ -87,13 +87,18 @@ mapfile -t LIST < "${HOME}/dumpbot/whitelist.txt"
 ## Set 'WHITELISTED' to true if download link (sub-)domain is present 
 for WHITELISTED_LINKS in "${LIST[@]}"; do
     if [[ "${URL}" == *"${WHITELISTED_LINKS}"* ]]; then
-        echo "[INFO] Download link will be published on channel."
         WHITELISTED=true
     else
-        echo "[INFO] Download link is not whitelisted."
         WHITELISTED=false
     fi
 done
+
+## Print if link will be published, or not.
+if [ "${WHITELISTED}" == true ]; then
+    echo "[INFO] Download link will be published on channel."
+else
+    echo "[INFO] Download link will not be published on channel."
+fi
 
 if [[ -f $URL ]]; then
     cp -v "$URL" .
