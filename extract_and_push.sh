@@ -286,7 +286,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
         # Decrompress 'boot.img-ramdisk'
         ## Run only if 'boot.img-ramdisk' is not empty
-        if [ $(file boot.img-ramdisk | grep LZ4) ]; then
+        if [[ $(file boot.img-ramdisk | grep LZ4) || $(file boot.img-ramdisk | grep gzip) ]]; then
             unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
             7z x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
 
