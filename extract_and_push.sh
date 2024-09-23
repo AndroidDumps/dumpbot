@@ -696,10 +696,9 @@ branch_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "ht
 }
 
 # Add, commit, and push after filtering out certain files
-git init
+git init --initial-branch "$branch"
 git config user.name "dumper"
 git config user.email "dumper@$GITLAB_SERVER"
-git checkout -b "$branch"
 # find . -size +97M -printf '%P\n' -o -name '*sensetime*' -printf '%P\n' -o -iname '*Megvii*' -printf '%P\n' -o -name '*.lic' -printf '%P\n' -o -name '*zookhrs*' -printf '%P\n' > .gitignore
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing..</code>" > /dev/null
 git add -A
