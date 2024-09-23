@@ -101,7 +101,7 @@ else
 fi
 
 if [[ -f $URL ]]; then
-    cp -v "$URL" .
+    cp -v "$URL" .  
     MESSAGE="<code>Found file locally.</code>"
     if _json="$(sendTG normal "${MESSAGE}")"; then
         # grab initial message id
@@ -252,8 +252,6 @@ for image in init_boot.img vendor_kernel_boot.img vendor_boot.img boot.img dtbo.
         x=$(find . -type f -name "${image}")
         if [[ -n $x ]]; then
             mv -v "$x" "${image}"
-        else
-            echo "${image} not found!"
         fi
     fi
 done
