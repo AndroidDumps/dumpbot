@@ -81,6 +81,20 @@ curl --compressed --fail-with-body --silent --location "https://$GITLAB_SERVER" 
     exit 1
 }
 
+# Check if link is in whitelist.
+mapfile -t LIST < "${HOME}/dumpbot/whitelist.txt"
+
+## Set 'WHITELISTED' to true if download link (sub-)domain is present 
+for WHITELISTED_LINKS in "${LIST[@]}"; do
+    if [[ "${URL}" == *"${WHITELISTED_LINKS}"* ]]; then
+        echo "[INFO] Download link will be published on channel."
+        WHITELISTED=true
+    else
+        echo "[INFO] Download link is not whitelisted."
+        WHITELISTED=false
+    fi
+done
+
 if [[ -f $URL ]]; then
     cp -v "$URL" .
     MESSAGE="<code>Found file locally.</code>"
@@ -723,15 +737,19 @@ sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Pushed</co
 # Prepare message to be sent to Telegram channel
 commit_head=$(git rev-parse HEAD)
 commit_link="https://$GITLAB_SERVER/$ORG/$repo/commit/$commit_head"
+
+## Only add this line in case URL is expected in the whitelist
+if [ ${WHITELISTED} == true ]; then
+    link=" | <a href=\"${URL}\">Firmware</a>"
+fi
+
 echo -e "Sending telegram notification"
-tg_html_text="<b>Brand: $brand</b>
-<b>Device: $codename</b>
-<b>Version: $release</b>
-<b>Fingerprint: $fingerprint</b>
-<b>Platform: $platform</b>
-<b>Git link:</b>
-<a href=\"$commit_link\">Commit</a>
-<a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">$codename</a>"
+tg_html_text="<b>Brand</b>: <code>$brand</code>
+<b>Device</b>: <code>$codename</code>
+<b>Version</b>: <code>$release</code>
+<b>Fingerprint</b>: <code>$fingerprint</code>
+<b>Platform</b>: <code>$platform</code>
+<a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">Repository</a>${link} | <a href=\"$commit_link\">Commit</a>$link"
 
 # Send message to Telegram channel
 curl --compressed -s "https://api.telegram.org/bot${API_KEY}/sendmessage" --data "text=${tg_html_text}&chat_id=@android_dumps&parse_mode=HTML&disable_web_page_preview=True" > /dev/null
