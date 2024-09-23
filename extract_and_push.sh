@@ -196,7 +196,7 @@ else
 
                 # Uses '7zz' if images could not be extracted via 'fsck.erofs'
                 echo "Extraction via fsck.erofs failed, extracting $p partition via 7zz"
-                7zz x "$p".img -y -o"$p"/ || {
+                7zz -snld x "$p".img -y -o"$p"/ || {
 
                     # Uses mount 'loop' if extraction via '7zz' failed
                     rm -rf "${p}"/*
@@ -289,7 +289,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
         ## Run only if 'boot.img-ramdisk' is not empty
         if [[ $(file boot.img-ramdisk | grep LZ4) || $(file boot.img-ramdisk | grep gzip) ]]; then
             unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
-            7zz x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
 
             ## Clean-up
             rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -332,7 +332,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
 
         # Decrompress 'vendor_boot.img-vendor_ramdisk'
         unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7zz x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -373,7 +373,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
 
         # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
         unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7zz x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -402,7 +402,7 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
 
         # Decrompress 'init_boot.img-ramdisk'
         unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7zz x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk"
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -438,7 +438,7 @@ for dir in "vendor/euclid" "system/system/euclid" "reserve/reserve"; do
         for f in *.img; do
             [[ -f $f ]] || continue
             sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Partition Name: ${p}</code>" > /dev/null
-            7zz x "$f" -o"${f/.img/}"
+            7zz -snld x "$f" -o"${f/.img/}"
             rm -fv "$f"
         done
         popd || terminate 1
