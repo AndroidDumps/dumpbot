@@ -213,16 +213,18 @@ else
             mkdir "$p" || rm -rf "${p:?}"/*
 
             # Try to extract images via 'fsck.erofs'
-            echo "Trying to extract $p partition via fsck.erofs."
-            ${HOME}/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img || {
+            echo "[INFO] Extracting '$p' via 'fsck.erofs'..."
+            ${HOME}/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img > /dev/null || {
+                echo "[WARN] Extraction via 'fsck.erofs' failed."
 
                 # Uses '7zz' if images could not be extracted via 'fsck.erofs'
-                echo "Extraction via fsck.erofs failed, extracting $p partition via 7zz"
+                echo "[INFO] Extracting '$p' via '7zz'..."
                 7zz -snld x "$p".img -y -o"$p"/ > /dev/null || {
+                    echo "[ERROR] Extraction via '7zz' failed."
 
                     # Uses mount 'loop' if extraction via '7zz' failed
                     rm -rf "${p}"/*
-                    echo "Couldn't extract $p partition via 7zz. Using mount loop"
+                    echo "[INFO] Extracting '$p' by mounting..."
                     mount -o loop -t auto "$p".img "$p"
                     mkdir "${p}_"
                     cp -rf "${p}/*" "${p}_"
@@ -264,6 +266,7 @@ VMLINUX_TO_ELF="${HOME}/vmlinux-to-elf/vmlinux-to-elf"
 
 # Extract 'boot.img'
 if [[ -f "${PWD}/boot.img" ]]; then
+    echo "[INFO] Extracting 'boot.img' content"
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/boot.img
@@ -276,40 +279,53 @@ if [[ -f "${PWD}/boot.img" ]]; then
     mkdir -p "${OUTPUT}/dtb"
 
     # Extract device-tree blobs from 'boot.img'
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null 
+    echo "[INFO] Extracting device-tree blobs..."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Do not run 'dtc' if no DTB was found
     if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+        echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${PWD}/boot/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
         done
     fi
 
     # Extract 'ikconfig'
+    echo "[INFO] Extract 'ikconfig'..."
     if command -v extract-ikconfig > /dev/null ; then
-        extract-ikconfig "${PWD}"/boot.img > "${PWD}"/ikconfig
+        extract-ikconfig "${PWD}"/boot.img > "${PWD}"/ikconfig > /dev/null || {
+            echo "[ERROR] Failed to generate 'ikconfig'"
+        }
     fi
 
     # Kallsyms
-    python3 "${KALLSYMS_FINDER}" "${IMAGE}" > kallsyms.txt
+    echo "[INFO] Generating 'kallsyms.txt'..."
+    python3 "${KALLSYMS_FINDER}" "${IMAGE}" > kallsyms.txt || {
+        echo "[ERROR] Failed to generate 'kallsyms.txt'"
+    }
 
     # ELF
-    python3 "${VMLINUX_TO_ELF}" "${IMAGE}" boot.elf
+    echo "[INFO] Extracting 'boot.elf'..."
+    python3 "${VMLINUX_TO_ELF}" "${IMAGE}" boot.elf > /dev/null || {
+        echo "[ERROR] Failed to generate 'boot.elf'"
+    }
 
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'boot.img' through 'unpackbootimg'
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+        echo "[INFO] Extracting 'boot.img' to 'boot/'..."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'boot.img-ramdisk'
         ## Run only if 'boot.img-ramdisk' is not empty
         if [[ $(file boot.img-ramdisk | grep LZ4) || $(file boot.img-ramdisk | grep gzip) ]]; then
-            unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
-            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null
+            echo "[INFO] Extracting ramdisk..."
+            unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
+            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
 
             ## Clean-up
             rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -319,6 +335,7 @@ fi
 
 # Extract 'vendor_boot.img'
 if [[ -f "${PWD}/vendor_boot.img" ]]; then
+    echo "[INFO] Extracting 'vendor_boot.img' content"
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/vendor_boot.img
@@ -332,14 +349,16 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     mkdir -p "${OUTPUT}/ramdisk"
 
     # Extract device-tree blobs from 'vendor_boot.img'
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
+    echo "[INFO] Extracting device-tree blobs..."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
     if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+        echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
         done
     fi
 
@@ -348,11 +367,13 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         ## Unpack 'vendor_boot.img' through 'unpackbootimg'
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+        echo "[INFO] Extracting 'vendor_boot.img' to 'vendor_boot/'..."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'vendor_boot.img-vendor_ramdisk'
-        unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null
+        echo "[INFO] Extracting ramdisk..."
+        unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -361,6 +382,8 @@ fi
 
 # Extract 'vendor_kernel_boot.img'
 if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
+    echo "[INFO] Extracting 'vendor_kernel_boot.img' content"
+
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/vendor_kernel_boot.img
@@ -373,14 +396,16 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     mkdir -p "${OUTPUT}/dtb"
 
     # Extract device-tree blobs from 'vendor_kernel_boot.img'
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null
+    echo "[INFO] Extracting device-tree blobs..."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
     if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+        echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
         done
     fi
 
@@ -389,11 +414,13 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+        echo "[INFO] Extracting 'vendor_kernel_boot.img' to 'vendor_kernel_boot/'..."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
-        unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null
+        echo "[INFO] Extracting ramdisk..."
+        unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -402,6 +429,8 @@ fi
 
 # Extract 'init_boot.img'
 if [[ -f "${PWD}/init_boot.img" ]]; then
+    echo "[INFO] Extracting 'init_boot.img' content"
+
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/init_boot.img
@@ -418,11 +447,13 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'init_boot.img' through 'unpackbootimg'
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}"
+        echo "[INFO] Extracting 'init_boot.img' to 'init_boot/'..."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'init_boot.img-ramdisk'
-        unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4"
-        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null
+        echo "[INFO] Extracting ramdisk..."
+        unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -431,6 +462,8 @@ fi
 
 # Extract 'dtbo.img'
 if [[ -f "${PWD}/dtbo.img" ]]; then
+    echo "[INFO] Extracting 'dtbo.img' content"
+
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/dtbo.img
@@ -442,12 +475,14 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
     mkdir -p "${OUTPUT}/dts"
 
     # Extract device-tree blobs from 'dtbo.img'
-    extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null
+    echo "[INFO] Extracting device-tree blobs..."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/00_kernel"
 
     # Decompile '.dtb' to '.dts'
+    echo "[INFO] Decompiling device-tree blobs..."
     for dtb in $(find "${OUTPUT}" -type f); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')"
+        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
     done
 fi
 
@@ -467,19 +502,26 @@ done
 
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>All partitions extracted.</code>" > /dev/null
 
-# Generate 'board-info.txt' for Qualcomm devices
+# Generate 'board-info.txt'
+echo "[INFO] Generating 'board-info.txt'..."
+
+## Generic
+if [ -f ./vendor/build.prop ]; then
+    strings ./vendor/build.prop | grep "ro.vendor.build.date.utc" | sed "s|ro.vendor.build.date.utc|require version-vendor|g" >> ./board-info.txt
+fi
+
+## Qualcomm-specific
 if [[ $(find . -name "modem") ]] && [[ $(find . -name "*./tz*") ]]; then
     find ./modem -type f -exec strings {} \; | rg "QC_IMAGE_VERSION_STRING=MPSS." | sed "s|QC_IMAGE_VERSION_STRING=MPSS.||g" | cut -c 4- | sed -e 's/^/require version-baseband=/' >> ${PWD}/board-info.txt
     find ./tz* -type f -exec strings {} \; | rg "QC_IMAGE_VERSION_STRING" | sed "s|QC_IMAGE_VERSION_STRING|require version-trustzone|g" >> ${PWD}/board-info.txt
 fi
 
-if [ -f ./vendor/build.prop ]; then
-    strings ./vendor/build.prop | grep "ro.vendor.build.date.utc" | sed "s|ro.vendor.build.date.utc|require version-vendor|g" >> ./board-info.txt
-fi
+## Sort 'board-info.txt' content
 sort -u -o ./board-info.txt ./board-info.txt
 
 # Prop extraction
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting props..</code>" > /dev/null
+echo "[INFO] Extracting properties..."
+sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting properties ..</code>" > /dev/null
 
 oplus_pipeline_key=$(rg -m1 -INoP --no-messages "(?<=^ro.oplus.pipeline_key=).*" my_manifest/build*.prop)
 
@@ -672,16 +714,20 @@ platform: ${platform}
 top_codename: ${top_codename}
 is_ab: ${is_ab}"
 
+# Generate device tree ('aospdtgen')
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Generating device tree</code>" > /dev/null
 mkdir -p aosp-device-tree
-if uvx aospdtgen@1.1.1 . --output ./aosp-device-tree; then
+
+echo "[INFO] Generating device tree..."
+if uvx aospdtgen@1.1.1 . --output ./aosp-device-tree > /dev/null; then
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>AOSP device tree successfully generated.</code>" > /dev/null
 else
-    echo "Failed to generate AOSP device tree"
+    echo "[ERROR] Failed to generate device tree."
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree</code>" > /dev/null
 fi
 
-# Generate all_files.txt
+# Generate 'all_files.txt'
+echo "[INFO] Generating 'all_files.txt'..."
 find . -type f -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
 
 # Check whether the subgroup exists or not
@@ -722,15 +768,19 @@ branch_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "ht
 git init --initial-branch "$branch"
 git config user.name "dumper"
 git config user.email "dumper@$GITLAB_SERVER"
-# find . -size +97M -printf '%P\n' -o -name '*sensetime*' -printf '%P\n' -o -iname '*Megvii*' -printf '%P\n' -o -name '*.lic' -printf '%P\n' -o -name '*zookhrs*' -printf '%P\n' > .gitignore
+
+## Committing
+echo "[INFO] Adding files and committing..."
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing..</code>" > /dev/null
 git add -A
 git commit --quiet --signoff --message="$description"
 
+## Pushing
+echo "[INFO] Pushing..."
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Pushing..</code>" > /dev/null
 git push "$PUSH_HOST:$ORG/$repo.git" HEAD:refs/heads/"$branch" || {
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Pushing failed!</code>" > /dev/null
-    echo "Pushing failed!"
+    echo "[ERROR] Pushing failed!"
     terminate 1
 }
 
@@ -749,7 +799,7 @@ if [ ${WHITELISTED} == true ]; then
     link=" | <a href=\"${URL}\">Firmware</a>"
 fi
 
-echo -e "Sending telegram notification"
+echo -e "[INFO] Sending Telegram notification"
 tg_html_text="<b>Brand</b>: <code>$brand</code>
 <b>Device</b>: <code>$codename</code>
 <b>Version</b>: <code>$release</code>
