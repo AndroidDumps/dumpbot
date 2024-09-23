@@ -39,10 +39,29 @@ async def dump_main(
         )
         return
 
-    # Try to call jenkins
+    # Try to check for existing build and call jenkins if necessary
     try:
         dump_args = schemas.DumpArguments(
             url=context.args[0], use_alt_dumper=use_alt_dumper
+        )
+        initial_message = await context.bot.send_message(
+            chat_id=chat.id,
+            reply_to_message_id=message.message_id,
+            text="Checking for existing builds...",
+        )
+
+        exists, status_message = await utils.check_existing_build(dump_args)
+        if exists:
+            await context.bot.edit_message_text(
+                chat_id=chat.id,
+                message_id=initial_message.message_id,
+                text=status_message,
+            )
+            return
+
+        await context.bot.delete_message(
+            chat_id=chat.id,
+            message_id=initial_message.message_id,
         )
 
         response_text = await utils.call_jenkins(dump_args)
