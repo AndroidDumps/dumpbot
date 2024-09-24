@@ -130,7 +130,9 @@ else
         sendTG() { :; } && sendTG_edit_wrapper() { :; }
     fi
 
+    # Confirm download has started
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloading the file..</code>" > /dev/null
+    echo "[INFO] Started downloading... ($(date +%R:%S))"
 
     # downloadError: Kill the script in case downloading failed
     downloadError() {
@@ -158,6 +160,7 @@ else
         ;;
     esac
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloaded the file.</code>" > /dev/null
+    echo "[INFO] Finished downloading the file. ($(date +%R:%S))"
 fi
 
 # Clean query strings if any from URL
