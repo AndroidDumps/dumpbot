@@ -43,18 +43,27 @@ sendTG_edit_wrapper() {
     esac
 }
 
-# reply to the initial message sent to the group with "Job Done" or "Job Failed!" accordingly
-# 1st arg should be either 1 ( error ) or 0 ( success )
+
+# Inform the user about final status of build
 terminate() {
-    if [[ ${1:?} == "0" ]]; then
-        local string="<b>done</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)"
-    elif [[ ${1:?} == "1" ]]; then
+    case ${1:?} in
+        ## Success
+        0)
+            local string="<b>done</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)"
+        ;;
+        ## Failure
+        1)
         local string="<b>failed!</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)
 View <a href=\"${BUILD_URL}consoleText\">console logs</a> for more."
-    else
+        ;;
+        ## Aborted
+        2)
         local string="<b>aborted!</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)
 Branch already exists on <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">GitLab</a>."
-    fi
+        ;;
+    esac
+
+    ## Template
     sendTG reply "${MESSAGE_ID}" "<b>Job</b> ${string}"
     exit "${1:?}"
 }
