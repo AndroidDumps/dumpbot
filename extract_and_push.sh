@@ -142,18 +142,18 @@ else
     # Properly check for different hosting websties.
     case ${URL} in
         *drive.google.com*)
-            uvx gdown@5.2.0 -q "${URL}" --fuzzy || downloadError
+            uvx gdown@5.2.0 -q "${URL}" --fuzzy > /dev/null || downloadError
         ;;
         *mediafire.com*)
-           uvx --from git+https://github.com/Juvenal-Yescas/mediafire-dl@5873ecf1601f1cedc10a933a3a00d340d0f02db3 mediafire-dl "${URL}" || downloadError
+           uvx --from git+https://github.com/Juvenal-Yescas/mediafire-dl@5873ecf1601f1cedc10a933a3a00d340d0f02db3 mediafire-dl "${URL}" > /dev/null || downloadError
         ;;
         *mega.nz*)
-            megatools dl "${URL}" || downloadError
+            megatools dl "${URL}" > /dev/null || downloadError
         ;;
         *)
             aria2c -q -s16 -x16 --check-certificate=false "${URL}" || {
                 rm -fv ./*
-                wget --no-check-certificate "${URL}" || downloadError
+                wget -q --no-check-certificate "${URL}" || downloadError
             }
         ;;
     esac
