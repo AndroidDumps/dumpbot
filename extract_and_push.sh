@@ -97,8 +97,7 @@ mapfile -t LIST < "${HOME}/dumpbot/whitelist.txt"
 for WHITELISTED_LINKS in "${LIST[@]}"; do
     if [[ "${URL}" == *"${WHITELISTED_LINKS}"* ]]; then
         WHITELISTED=true
-    else
-        WHITELISTED=false
+        break
     fi
 done
 
