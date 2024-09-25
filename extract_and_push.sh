@@ -184,14 +184,14 @@ fi
 
 if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumpyara.." > /dev/null
-    uvx dumpyara@1.0.7 "${FILE}" -o "${PWD}" || {
+    uvx dumpyara "${FILE}" -o "${PWD}" || {
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
         terminate 1
     }
 else
+    # Try to minimize these, atleast "third-party" tools
     EXTERNAL_TOOLS=(
         https://github.com/AndroidDumps/Firmware_extractor
-        https://github.com/marin-m/vmlinux-to-elf
     )
 
     for tool_url in "${EXTERNAL_TOOLS[@]}"; do
@@ -272,8 +272,6 @@ done
 # Extract kernel, device-tree blobs [...]
 ## Set commonly used tools
 UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/Linux/bin/unpackbootimg"
-KALLSYMS_FINDER="${HOME}/vmlinux-to-elf/kallsyms-finder"
-VMLINUX_TO_ELF="${HOME}/vmlinux-to-elf/vmlinux-to-elf"
 
 # Extract 'boot.img'
 if [[ -f "${PWD}/boot.img" ]]; then
@@ -313,13 +311,13 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
     # Kallsyms
     echo "[INFO] Generating 'kallsyms.txt'..."
-    python3 "${KALLSYMS_FINDER}" "${IMAGE}" > kallsyms.txt || {
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 kallsyms-finder "${IMAGE}" > kallsyms.txt || {
         echo "[ERROR] Failed to generate 'kallsyms.txt'"
     }
 
     # ELF
     echo "[INFO] Extracting 'boot.elf'..."
-    python3 "${VMLINUX_TO_ELF}" "${IMAGE}" boot.elf > /dev/null || {
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null || {
         echo "[ERROR] Failed to generate 'boot.elf'"
     }
 
