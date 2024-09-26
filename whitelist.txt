@@ -2,7 +2,9 @@ assorted.downloads.oppo.com/
 bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/
 dl.google.com/
 d.miui.com/
+gauss-componentotacostmanual-sg.allawnofs.com/
 gauss-otacostmanual-cn.allawnfs.com/
+lolinet.com/
 mediafire.com/
 pixeldrain.com/
 rms01.realme.net/
