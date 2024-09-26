@@ -12,7 +12,9 @@ console = Console()
 
 
 async def dump_main(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, use_alt_dumper: bool = False
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    use_alt_dumper: bool = False,
 ) -> None:
     """Main handler for the /dump and /dump_alt commands."""
     chat: Optional[Chat] = update.effective_chat
@@ -39,30 +41,33 @@ async def dump_main(
         )
         return
 
+    url = context.args[0]
+    force = "f" in context.args[1:] if len(context.args) > 1 else False
+
     # Try to check for existing build and call jenkins if necessary
     try:
-        dump_args = schemas.DumpArguments(
-            url=context.args[0], use_alt_dumper=use_alt_dumper
-        )
-        initial_message = await context.bot.send_message(
-            chat_id=chat.id,
-            reply_to_message_id=message.message_id,
-            text="Checking for existing builds...",
-        )
+        dump_args = schemas.DumpArguments(url=url, use_alt_dumper=use_alt_dumper)
 
-        exists, status_message = await utils.check_existing_build(dump_args)
-        if exists:
-            await context.bot.edit_message_text(
+        if not force:
+            initial_message = await context.bot.send_message(
+                chat_id=chat.id,
+                reply_to_message_id=message.message_id,
+                text="Checking for existing builds...",
+            )
+
+            exists, status_message = await utils.check_existing_build(dump_args)
+            if exists:
+                await context.bot.edit_message_text(
+                    chat_id=chat.id,
+                    message_id=initial_message.message_id,
+                    text=status_message,
+                )
+                return
+
+            await context.bot.delete_message(
                 chat_id=chat.id,
                 message_id=initial_message.message_id,
-                text=status_message,
             )
-            return
-
-        await context.bot.delete_message(
-            chat_id=chat.id,
-            message_id=initial_message.message_id,
-        )
 
         response_text = await utils.call_jenkins(dump_args)
     except ValidationError:
