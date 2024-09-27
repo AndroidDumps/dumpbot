@@ -247,6 +247,20 @@ else
             rm -fv "$p".img
         fi
     done
+
+    # Also extract 'fsg.mbn' from 'radio.img'
+    if [ -f "${PWD}/fsg.mbn" ]; then
+        echo "[INFO] Extracting 'fsg.mbn' via '7zz'..."
+
+        # Create '${PWD}/radio/fsg'
+        mkdir ${PWD}/radio/fsg
+
+        # Thankfully, 'fsg.mbn' is a simple EXT2 partition
+        7zz -snld x "${PWD}/fsg.mbn" -o"${PWD}/radio/fsg" > /dev/null
+
+        # Remove 'fsg.mbn'
+        rm -rf "${PWD}/fsg.mbn"
+    fi
 fi
 
 rm -fv "$FILE"
