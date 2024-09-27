@@ -129,6 +129,35 @@ else
         sendTG() { :; } && sendTG_edit_wrapper() { :; }
     fi
 
+    # If the device contains a link from Xiaomi's CDN, replace it (when applicable)
+    # with the fastest one
+    if [[ "${URL}" == *"d.miui.com"* ]] && [ ! "$(echo "${URL}" | grep -qE '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')" ]; then
+        # Set '${URL_ORIGINAL}' and '${FILE_PATH}' in case we might need to roll back
+        URL_ORIGINAL=${URL%/*}
+        FILE_PATH=${URL#*d.miui.com/}
+
+        # Array of different possible mirrors
+        MIRRORS=(
+            "https://cdnorg.d.miui.com"
+            "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com"
+            "${URL_ORIGINAL}"
+        )
+
+        # Check back and forth for the best available mirror
+        for URLS in "${MIRRORS[@]}"; do
+            # Change mirror's domain with one(s) from array
+            URL=${URLS}/${FILE_PATH}
+
+            # Be sure that the mirror is available. Once it is, break the loop 
+            if [ $(curl -s -o /dev/null -w "%{http_code}" "${URL}") == "404" ]; then
+                echo "[ERROR] ${URLS} is not available. Trying with other mirror(s)..."
+            else
+                echo "[INFO] Found best available mirror."
+                break
+            fi
+        done
+    fi
+
     # Confirm download has started
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloading the file..</code>" > /dev/null
     echo "[INFO] Started downloading... ($(date +%R:%S))"
