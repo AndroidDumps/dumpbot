@@ -751,7 +751,7 @@ fi
 
 # Generate 'all_files.txt'
 echo "[INFO] Generating 'all_files.txt'..."
-find . -type f -not -name all_files.txt -not -path "aosp-device-tree/*" -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
+find . -type f ! -name all_files.txt -and ! -path "*/aosp-device-tree/*" -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
 
 # Check whether the subgroup exists or not
 if ! group_id_json="$(curl --compressed -sH --fail-with-body "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups/$ORG%2f$repo_subgroup")"; then
