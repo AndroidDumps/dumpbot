@@ -11,12 +11,11 @@ from dumpyarabot.config import settings
 console = Console()
 
 
-async def dump_main(
+async def dump(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    use_alt_dumper: bool = False,
 ) -> None:
-    """Main handler for the /dump and /dump_alt commands."""
+    """Handler for the /dump command."""
     chat: Optional[Chat] = update.effective_chat
     message: Optional[Message] = update.effective_message
 
@@ -42,6 +41,7 @@ async def dump_main(
         return
 
     url = context.args[0]
+    use_alt_dumper = "a" in context.args[1:] if len(context.args) > 1 else False
     force = "f" in context.args[1:] if len(context.args) > 1 else False
     add_blacklist = "b" in context.args[1:] if len(context.args) > 1 else False
 
@@ -85,16 +85,6 @@ async def dump_main(
         reply_to_message_id=message.message_id,
         text=response_text,
     )
-
-
-async def dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler for the /dump command."""
-    await dump_main(update, context, use_alt_dumper=True)
-
-
-async def dump_alt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler for the /dump_alt command."""
-    await dump_main(update, context, use_alt_dumper=False)
 
 
 async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
