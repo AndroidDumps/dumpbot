@@ -33,10 +33,12 @@ async def dump(
 
     # Ensure that we had some arguments passed
     if not context.args:
+        usage = "Usage: `/dump [URL] [a|f|b]`\nURL: required, a: alt dumper, f: force, b: blacklist"
         await context.bot.send_message(
             chat_id=chat.id,
             reply_to_message_id=message.message_id,
-            text="Please pass in a URL",
+            text=usage,
+            parse_mode='Markdown',
         )
         return
 
