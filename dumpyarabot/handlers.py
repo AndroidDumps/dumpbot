@@ -43,10 +43,13 @@ async def dump_main(
 
     url = context.args[0]
     force = "f" in context.args[1:] if len(context.args) > 1 else False
+    add_blacklist = "b" in context.args[1:] if len(context.args) > 1 else False
 
     # Try to check for existing build and call jenkins if necessary
     try:
-        dump_args = schemas.DumpArguments(url=url, use_alt_dumper=use_alt_dumper)
+        dump_args = schemas.DumpArguments(
+            url=url, use_alt_dumper=use_alt_dumper, add_blacklist=add_blacklist
+        )
 
         if not force:
             initial_message = await context.bot.send_message(

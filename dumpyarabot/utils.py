@@ -38,6 +38,9 @@ def _is_matching_build(
             return (
                 params.get("URL") == args.url.unicode_string()
                 and params.get("USE_ALT_DUMPER") == args.use_alt_dumper
+                # TODO: @Antonio - Review if we want to check ADD_BLACKLIST for matching builds
+                # Uncomment the line below if we decide to include ADD_BLACKLIST in the matching criteria
+                # and params.get("ADD_BLACKLIST") == args.add_blacklist
             )
     return False
 
@@ -69,6 +72,7 @@ async def call_jenkins(args: schemas.DumpArguments) -> str:
             params={
                 "URL": args.url.unicode_string(),
                 "USE_ALT_DUMPER": args.use_alt_dumper,
+                "ADD_BLACKLIST": args.add_blacklist,
             },
             auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
         )
