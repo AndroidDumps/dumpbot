@@ -825,7 +825,7 @@ git config user.email "dumper@$GITLAB_SERVER"
 ## Committing
 echo "[INFO] Adding files and committing..."
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing..</code>" > /dev/null
-git add -A
+git add --ignore-errors -A >> /dev/null 2>&1
 git commit --quiet --signoff --message="$description"
 
 ## Pushing
