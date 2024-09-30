@@ -131,9 +131,9 @@ else
 
     # If the device contains a link from Xiaomi's CDN, replace it (when applicable)
     # with the fastest one
-    if [[ "${URL}" == *"d.miui.com"* ]] && [ ! "$(echo "${URL}" | grep -qE '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')" ]; then
+    if [[ "${URL}" == *"d.miui.com"* ]] && [ ! "$(echo "${URL}" | grep -E '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')" ]; then
         # Set '${URL_ORIGINAL}' and '${FILE_PATH}' in case we might need to roll back
-        URL_ORIGINAL=${URL%/*}
+        URL_ORIGINAL=$(echo ${URL} | sed -E 's|(https://[^/]+).*|\1|')
         FILE_PATH=${URL#*d.miui.com/}
 
         # Array of different possible mirrors
@@ -149,7 +149,7 @@ else
             URL=${URLS}/${FILE_PATH}
 
             # Be sure that the mirror is available. Once it is, break the loop 
-            if [ $(curl -s -o /dev/null -w "%{http_code}" "${URL}") == "404" ]; then
+            if [ "$(curl -I -sS "${URL}" | head -n1 | cut -d' ' -f2)" == "404" ]; then
                 echo "[ERROR] ${URLS} is not available. Trying with other mirror(s)..."
             else
                 echo "[INFO] Found best available mirror."
@@ -717,7 +717,7 @@ brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" odm/etc/${cod
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" vendor/odm/etc/build*.prop)
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.brand=).*" {oppo_product,my_product}/build*.prop | head -1)
 [[ -z ${brand} ]] && brand=$(echo "$fingerprint" | cut -d / -f1)
-[[ -z ${brand} ]] && brand=$(echo "$brand")
+[[ -z ${brand} ]] && brand=$(echo "$manufacturer")
 
 description=$(rg -m1 -INoP --no-messages "(?<=^ro.build.description=).*" {system,system/system}/build.prop)
 [[ -z ${description} ]] && description=$(rg -m1 -INoP --no-messages "(?<=^ro.build.description=).*" {system,system/system}/build*.prop)
