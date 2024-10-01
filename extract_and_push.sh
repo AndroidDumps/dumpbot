@@ -278,7 +278,7 @@ else
                 }
             }
             # Clean-up
-            rm -fv "$p".img
+            rm -f "$p".img
         fi
     done
 
@@ -297,7 +297,7 @@ else
     fi
 fi
 
-rm -fv "$FILE"
+rm -f "$FILE"
 
 for image in init_boot.img vendor_kernel_boot.img vendor_boot.img boot.img dtbo.img; do
     if [[ ! -f ${image} ]]; then
