@@ -169,7 +169,7 @@ else
     esac
 
     # Confirm download has started
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloading the file..</code>" > /dev/null
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloading the file...</code>" > /dev/null
     echo "[INFO] Started downloading... ($(date +%R:%S))"
 
     # downloadError: Kill the script in case downloading failed
@@ -259,7 +259,7 @@ else
     # Extract the images
     for p in "${PARTITIONS[@]}"; do
         if [[ -f $p.img ]]; then
-            sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Partition Name: ${p}</code>" > /dev/null
+            # Create a folder for each partition
             mkdir "$p" || rm -rf "${p:?}"/*
 
             # Try to extract images via 'fsck.erofs'
@@ -272,9 +272,6 @@ else
                 7zz -snld x "$p".img -y -o"$p"/ > /dev/null || {
                     echo "[ERROR] Extraction via '7zz' failed."
 
-                    # Clear the last partition status
-                    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}" > /dev/null
-                    
                     # In case of failure, bail out and abort dumping altogether
                     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
                     terminate 1
