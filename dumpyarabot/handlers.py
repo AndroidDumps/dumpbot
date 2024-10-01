@@ -135,5 +135,31 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.bot_data["restart"] = True
+    chat: Optional[Chat] = update.effective_chat
+    message: Optional[Message] = update.effective_message
+    user = update.effective_user
+
+    if not chat or not message or not user:
+        return
+
+    # Ensure it can only be used in the correct group
+    if chat.id not in settings.ALLOWED_CHATS:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            reply_to_message_id=message.message_id,
+            text="You can't use this here",
+        )
+        return
+
+    # Check if the user is an admin
+    admins = await chat.get_administrators()
+    if user not in [admin.user for admin in admins]:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            reply_to_message_id=message.message_id,
+            text="You don't have permission to use this command",
+        )
+        return
+
     context.application.stop_running()
+    context.bot_data["restart"] = True
