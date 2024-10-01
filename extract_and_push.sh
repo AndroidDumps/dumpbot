@@ -129,37 +129,44 @@ else
         sendTG() { :; } && sendTG_edit_wrapper() { :; }
     fi
 
-    # If the device contains a link from Xiaomi's CDN, replace it (when applicable)
-    # with the fastest one
-    if [[ "${URL}" == *"d.miui.com"* ]] && [ ! "$(echo "${URL}" | grep -E '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')" ]; then
-        # Set '${URL_ORIGINAL}' and '${FILE_PATH}' in case we might need to roll back
-        URL_ORIGINAL=$(echo ${URL} | sed -E 's|(https://[^/]+).*|\1|')
-        FILE_PATH=${URL#*d.miui.com/}
+    # Override '${URL}' with best possible mirror of it
+    case "${URL}" in
+        # For Xiaomi: replace '${URL}' with (one of) the fastest mirror
+        *"d.miui.com"*)
+            # Do not run this loop in case we're already using one of the reccomended mirrors
+            if ! "$(echo "${URL}" | grep -E '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')"; then
+                # Set '${URL_ORIGINAL}' and '${FILE_PATH}' in case we might need to roll back
+                URL_ORIGINAL=$(echo "${URL}" | sed -E 's|(https://[^/]+).*|\1|')
+                FILE_PATH=${URL#*d.miui.com/}
 
-        # Array of different possible mirrors
-        MIRRORS=(
-            "https://cdnorg.d.miui.com"
-            "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com"
-            "${URL_ORIGINAL}"
-        )
+                # Array of different possible mirrors
+                MIRRORS=(
+                    "https://cdnorg.d.miui.com"
+                    "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com"
+                    "${URL_ORIGINAL}"
+                )
 
-        # Check back and forth for the best available mirror
-        for URLS in "${MIRRORS[@]}"; do
-            # Change mirror's domain with one(s) from array
-            URL=${URLS}/${FILE_PATH}
+                # Check back and forth for the best available mirror
+                for URLS in "${MIRRORS[@]}"; do
+                    # Change mirror's domain with one(s) from array
+                    URL=${URLS}/${FILE_PATH}
 
-            # Be sure that the mirror is available. Once it is, break the loop 
-            if [ "$(curl -I -sS "${URL}" | head -n1 | cut -d' ' -f2)" == "404" ]; then
-                echo "[ERROR] ${URLS} is not available. Trying with other mirror(s)..."
-            else
-                echo "[INFO] Found best available mirror."
-                break
+                    # Be sure that the mirror is available. Once found, break the loop 
+                    if [ "$(curl -I -sS "${URL}" | head -n1 | cut -d' ' -f2)" == "404" ]; then
+                        echo "[ERROR] ${URLS} is not available. Trying with other mirror(s)..."
+                    else
+                        echo "[INFO] Found best available mirror."
+                        break
+                    fi
+                done
             fi
-        done
-    elif [[ $URL == https://pixeldrain.com/u/* ]]; then
-        echo "[INFO] Pixeldrain URL detected. Converting to alternative domain."
-        URL="https://pd.cybar.xyz/${URL##*/}"
-    fi
+        ;;
+        # For Pixeldrain: replace the link with a direct one
+        *"pixeldrain.com"*)
+            echo "[INFO] Replacing with best available mirror."
+            URL="https://pd.cybar.xyz/${URL##*/}"
+        ;;
+    esac
 
     # Confirm download has started
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Downloading the file..</code>" > /dev/null
