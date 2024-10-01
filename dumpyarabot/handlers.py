@@ -43,7 +43,7 @@ async def dump(
         return
 
     url = context.args[0]
-    use_alt_dumper = "a" in context.args[1:] if len(context.args) > 1 else False
+    use_alt_dumper = "a" not in context.args[1:] if len(context.args) > 1 else True
     force = "f" in context.args[1:] if len(context.args) > 1 else False
     add_blacklist = "b" in context.args[1:] if len(context.args) > 1 else False
 
