@@ -824,7 +824,11 @@ git config user.email "dumper@$GITLAB_SERVER"
 echo "[INFO] Adding files and committing..."
 sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing...</code>" > /dev/null
 git add --ignore-errors -A >> /dev/null 2>&1
-git commit --quiet --signoff --message="$description"
+git commit --quiet --signoff --message="$description" || {
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing failed!</code>" > /dev/null
+    echo "[ERROR] Committing failed!"
+    terminate 1
+}
 
 ## Pushing
 echo "[INFO] Pushing..."
