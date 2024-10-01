@@ -264,7 +264,7 @@ else
 
             # Try to extract images via 'fsck.erofs'
             echo "[INFO] Extracting '$p' via 'fsck.erofs'..."
-            "${HOME}"/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img >> /dev/null 2>&1 || {
+            "${HOME}"/Firmware_extractor/tools/fsck.erofs --extract="$p" "$p".img >> /dev/null 2>&1 || {
                 echo "[WARN] Extraction via 'fsck.erofs' failed."
 
                 # Uses '7zz' if images could not be extracted via 'fsck.erofs'
@@ -310,7 +310,7 @@ done
 
 # Extract kernel, device-tree blobs [...]
 ## Set commonly used tools
-UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/Linux/bin/unpackbootimg"
+UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/unpackbootimg"
 
 # Extract 'boot.img'
 if [[ -f "${PWD}/boot.img" ]]; then
