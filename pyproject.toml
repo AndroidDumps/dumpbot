@@ -1,25 +1,26 @@
-[tool.poetry]
+[project]
+authors = [
+    {name = "Akhil Narang", email = "me@akhilnarang.dev"},
+]
+requires-python = "<4.0,>=3.10"
+dependencies = [
+    "python-telegram-bot<21.0,>=20.7",
+    "pydantic<3.0.0,>=2.5.2",
+    "httpx<1.0.0,>=0.25.2",
+    "rich<14.0.0,>=13.7.0",
+    "pydantic-settings<3.0.0,>=2.1.0",
+]
 name = "dumpyarabot"
 version = "0.1.0"
 description = "Bot for AndroidDumps"
-authors = ["Akhil Narang <me@akhilnarang.dev>"]
 readme = "README.md"
 
-[tool.poetry.dependencies]
-python = "^3.10"
-python-telegram-bot = "^20.7"
-pydantic = "^2.5.2"
-httpx = "^0.25.2"
-rich = "^13.7.0"
-pydantic-settings = "^2.1.0"
+[tool.uv]
+dev-dependencies = [
+    "black<24.0.0,>=23.12.0",
+    "mypy<2.0.0,>=1.7.1",
+    "isort<6.0.0,>=5.13.2",
+    "ruff<1.0.0,>=0.1.8",
+    "autoflake<3.0.0,>=2.2.1",
+]
 
-[tool.poetry.group.dev.dependencies]
-black = "^23.12.0"
-mypy = "^1.7.1"
-isort = "^5.13.2"
-ruff = "^0.1.8"
-autoflake = "^2.2.1"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
