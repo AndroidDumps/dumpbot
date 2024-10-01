@@ -272,14 +272,12 @@ else
                 7zz -snld x "$p".img -y -o"$p"/ > /dev/null || {
                     echo "[ERROR] Extraction via '7zz' failed."
 
-                    # Uses mount 'loop' if extraction via '7zz' failed
-                    rm -rf "${p}"/*
-                    echo "[INFO] Extracting '$p' by mounting..."
-                    mount -o loop -t auto "$p".img "$p"
-                    mkdir "${p}_"
-                    cp -rf "${p}/*" "${p}_"
-                    umount "${p}"
-                    mv "${p}_" "${p}"
+                    # Clear the last partition status
+                    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}" > /dev/null
+                    
+                    # In case of failure, bail out and abort dumping altogether
+                    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
+                    terminate 1
                 }
             }
             # Clean-up
@@ -303,15 +301,6 @@ else
 fi
 
 rm -fv "$FILE"
-
-# clear the last partition status
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}" > /dev/null
-
-# Bail out right now if no system build.prop
-ls system/build*.prop 2> /dev/null || ls system/system/build*.prop 2> /dev/null || {
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
-    terminate 1
-}
 
 for image in init_boot.img vendor_kernel_boot.img vendor_boot.img boot.img dtbo.img; do
     if [[ ! -f ${image} ]]; then
