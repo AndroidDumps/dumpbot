@@ -133,3 +133,7 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply_to_message_id=message.message_id,
         text=response_message,
     )
+
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.bot_data["restart"] = True
+    context.application.stop_running()
