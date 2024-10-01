@@ -156,6 +156,9 @@ else
                 break
             fi
         done
+    elif [[ $URL == https://pixeldrain.com/u/* ]]; then
+        echo "[INFO] Pixeldrain URL detected. Converting to alternative domain."
+        URL="https://pd.cybar.xyz/${URL##*/}"
     fi
 
     # Confirm download has started
