@@ -565,7 +565,9 @@ if [[ $(find . -name "modem") ]] && [[ $(find . -name "*./tz*") ]]; then
 fi
 
 ## Sort 'board-info.txt' content
-sort -u -o ./board-info.txt ./board-info.txt
+if [ -f "${PWD}"/board-info.txt ]; then
+    sort -u -o ./board-info.txt ./board-info.txt
+fi
 
 # Prop extraction
 echo "[INFO] Extracting properties..."
