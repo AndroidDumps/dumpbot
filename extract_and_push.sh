@@ -243,7 +243,7 @@ else
     done
 
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with alternative dumper..." > /dev/null
-    bash ${HOME}/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
+    bash "${HOME}"/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
         terminate 1
     }
@@ -264,7 +264,7 @@ else
 
             # Try to extract images via 'fsck.erofs'
             echo "[INFO] Extracting '$p' via 'fsck.erofs'..."
-            ${HOME}/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img >> /dev/null 2>&1 || {
+            "${HOME}"/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img >> /dev/null 2>&1 || {
                 echo "[WARN] Extraction via 'fsck.erofs' failed."
 
                 # Uses '7zz' if images could not be extracted via 'fsck.erofs'
@@ -287,7 +287,7 @@ else
         echo "[INFO] Extracting 'fsg.mbn' via '7zz'..."
 
         # Create '${PWD}/radio/fsg'
-        mkdir ${PWD}/radio/fsg
+        mkdir "${PWD}"/radio/fsg
 
         # Thankfully, 'fsg.mbn' is a simple EXT2 partition
         7zz -snld x "${PWD}/fsg.mbn" -o"${PWD}/radio/fsg" > /dev/null
@@ -343,7 +343,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
     # Extract 'ikconfig'
     echo "[INFO] Extract 'ikconfig'..."
     if command -v extract-ikconfig > /dev/null ; then
-        extract-ikconfig "${PWD}"/boot.img > "${PWD}"/ikconfig > /dev/null || {
+        extract-ikconfig "${PWD}"/boot.img > "${PWD}"/ikconfig || {
             echo "[ERROR] Failed to generate 'ikconfig'"
         }
     fi
@@ -370,7 +370,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
         # Decrompress 'boot.img-ramdisk'
         ## Run only if 'boot.img-ramdisk' is not empty
-        if [[ $(file boot.img-ramdisk | grep LZ4) || $(file boot.img-ramdisk | grep gzip) ]]; then
+        if file boot.img-ramdisk | grep -q LZ4 || file boot.img-ramdisk | grep -q gzip; then
             echo "[INFO] Extracting ramdisk..."
             unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
             7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
@@ -560,8 +560,8 @@ fi
 
 ## Qualcomm-specific
 if [[ $(find . -name "modem") ]] && [[ $(find . -name "*./tz*") ]]; then
-    find ./modem -type f -exec strings {} \; | rg "QC_IMAGE_VERSION_STRING=MPSS." | sed "s|QC_IMAGE_VERSION_STRING=MPSS.||g" | cut -c 4- | sed -e 's/^/require version-baseband=/' >> ${PWD}/board-info.txt
-    find ./tz* -type f -exec strings {} \; | rg "QC_IMAGE_VERSION_STRING" | sed "s|QC_IMAGE_VERSION_STRING|require version-trustzone|g" >> ${PWD}/board-info.txt
+    find ./modem -type f -exec strings {} \; | rg "QC_IMAGE_VERSION_STRING=MPSS." | sed "s|QC_IMAGE_VERSION_STRING=MPSS.||g" | cut -c 4- | sed -e 's/^/require version-baseband=/' >> "${PWD}"/board-info.txt
+    find ./tz* -type f -exec strings {} \; | rg "QC_IMAGE_VERSION_STRING" | sed "s|QC_IMAGE_VERSION_STRING|require version-trustzone|g" >> "${PWD}"/board-info.txt
 fi
 
 ## Sort 'board-info.txt' content
@@ -690,7 +690,7 @@ codename=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.device=).*" odm/etc/b
     terminate 1
 }
 
-brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" odm/etc/${codename}_build.prop | head -1)
+brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" odm/etc/"${codename}"_build.prop | head -1)
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" odm/etc/build*.prop | head -1)
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" system/system/build_default.prop)
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.brand=).*" odm/etc/fingerprint/build.default.prop)
@@ -713,7 +713,7 @@ brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" odm/etc/${cod
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.brand=).*" vendor/odm/etc/build*.prop)
 [[ -z ${brand} ]] && brand=$(rg -m1 -INoP --no-messages "(?<=^ro.product.brand=).*" {oppo_product,my_product}/build*.prop | head -1)
 [[ -z ${brand} ]] && brand=$(echo "$fingerprint" | cut -d / -f1)
-[[ -z ${brand} ]] && brand=$(echo "$manufacturer")
+[[ -z ${brand} ]] && brand="$manufacturer"
 
 description=$(rg -m1 -INoP --no-messages "(?<=^ro.build.description=).*" {system,system/system}/build.prop)
 [[ -z ${description} ]] && description=$(rg -m1 -INoP --no-messages "(?<=^ro.build.description=).*" {system,system/system}/build*.prop)
@@ -844,7 +844,7 @@ commit_head=$(git rev-parse HEAD)
 commit_link="https://$GITLAB_SERVER/$ORG/$repo/commit/$commit_head"
 
 ## Only add this line in case URL is expected in the whitelist
-if [ ${WHITELISTED} == true ]; then
+if [ "${WHITELISTED}" == true ]; then
     link=" | <a href=\"${URL}\">Firmware</a>"
 fi
 
