@@ -16,13 +16,13 @@ sendTG() {
     local mode="${1:?Error: Missing mode}" && shift
     local api_url="https://api.telegram.org/bot${API_KEY:?}"
     if [[ ${mode} =~ normal ]]; then
-        curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML"
+        curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&disable_web_page_preview=True"
     elif [[ ${mode} =~ reply ]]; then
         local message_id="${1:?Error: Missing message id for reply.}" && shift
-        curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_to_message_id=${message_id}"
+        curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_to_message_id=${message_id}&disable_web_page_preview=True"
     elif [[ ${mode} =~ edit ]]; then
         local message_id="${1:?Error: Missing message id for edit.}" && shift
-        curl --compressed -s "${api_url}/editMessageText" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&message_id=${message_id}"
+        curl --compressed -s "${api_url}/editMessageText" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&message_id=${message_id}&disable_web_page_preview=True"
     fi
 }
 
