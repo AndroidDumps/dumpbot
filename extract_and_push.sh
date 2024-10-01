@@ -222,7 +222,7 @@ if [[ ! -f ${FILE} ]]; then
 fi
 
 if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
-    sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumpyara.." > /dev/null
+    sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumper..." > /dev/null
     uvx dumpyara "${FILE}" -o "${PWD}" || {
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
         terminate 1
@@ -242,7 +242,7 @@ else
         fi
     done
 
-    sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware.." > /dev/null
+    sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with alternative dumper..." > /dev/null
     bash ${HOME}/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
         terminate 1
@@ -255,7 +255,7 @@ else
         my_custom my_manifest my_carrier my_region my_bigball my_version special_preload vendor_dlkm odm_dlkm system_dlkm mi_ext radio
     )
 
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting partitions ..</code>" > /dev/null
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting partitions...</code>" > /dev/null
     # Extract the images
     for p in "${PARTITIONS[@]}"; do
         if [[ -f $p.img ]]; then
@@ -309,7 +309,7 @@ sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}" > /dev/null
 
 # Bail out right now if no system build.prop
 ls system/build*.prop 2> /dev/null || ls system/system/build*.prop 2> /dev/null || {
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>No system build*.prop found, pushing cancelled!</code>" > /dev/null
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
     terminate 1
 }
 
@@ -583,7 +583,7 @@ sort -u -o ./board-info.txt ./board-info.txt
 
 # Prop extraction
 echo "[INFO] Extracting properties..."
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting properties ..</code>" > /dev/null
+sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting properties...</code>" > /dev/null
 
 oplus_pipeline_key=$(rg -m1 -INoP --no-messages "(?<=^ro.oplus.pipeline_key=).*" my_manifest/build*.prop)
 
@@ -778,7 +778,7 @@ top_codename: ${top_codename}
 is_ab: ${is_ab}"
 
 # Generate device tree ('aospdtgen')
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Generating device tree</code>" > /dev/null
+sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Generating device tree...</code>" > /dev/null
 mkdir -p aosp-device-tree
 
 echo "[INFO] Generating device tree..."
@@ -786,7 +786,7 @@ if uvx aospdtgen@1.1.1 . --output ./aosp-device-tree > /dev/null; then
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>AOSP device tree successfully generated.</code>" > /dev/null
 else
     echo "[ERROR] Failed to generate device tree."
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree</code>" > /dev/null
+    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Failed to generate AOSP device tree.</code>" > /dev/null
 fi
 
 # Generate 'all_files.txt'
@@ -834,13 +834,13 @@ git config user.email "dumper@$GITLAB_SERVER"
 
 ## Committing
 echo "[INFO] Adding files and committing..."
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing..</code>" > /dev/null
+sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Committing...</code>" > /dev/null
 git add --ignore-errors -A >> /dev/null 2>&1
 git commit --quiet --signoff --message="$description"
 
 ## Pushing
 echo "[INFO] Pushing..."
-sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Pushing..</code>" > /dev/null
+sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Pushing...</code>" > /dev/null
 git push "$PUSH_HOST:$ORG/$repo.git" HEAD:refs/heads/"$branch" || {
     sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Pushing failed!</code>" > /dev/null
     echo "[ERROR] Pushing failed!"
