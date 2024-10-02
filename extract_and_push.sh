@@ -272,9 +272,12 @@ else
                 7zz -snld x "$p".img -y -o"$p"/ > /dev/null || {
                     echo "[ERROR] Extraction via '7zz' failed."
 
-                    # In case of failure, bail out and abort dumping altogether
-                    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
-                    terminate 1
+                    # Only abort if we're at the first occourence
+                    if [[ "${p}" == "${PARTITIONS[0]}" ]]; then
+                        # In case of failure, bail out and abort dumping altogether
+                        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
+                        terminate 1
+                    fi
                 }
             }
             # Clean-up
