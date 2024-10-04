@@ -5,6 +5,7 @@
 [[ -z ${PUSH_HOST} ]] && PUSH_HOST="dumps"
 [[ -z $ORG ]] && ORG="dumps"
 [[ -z ${USE_ALT_DUMPER} ]] && USE_ALT_DUMPER="false"
+echo "${ADD_BLACKLIST}"
 
 CHAT_ID="-1001412293127"
 
