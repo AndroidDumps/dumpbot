@@ -5,7 +5,6 @@
 [[ -z ${PUSH_HOST} ]] && PUSH_HOST="dumps"
 [[ -z $ORG ]] && ORG="dumps"
 [[ -z ${USE_ALT_DUMPER} ]] && USE_ALT_DUMPER="false"
-echo "${ADD_BLACKLIST}"
 
 CHAT_ID="-1001412293127"
 
@@ -99,14 +98,16 @@ for WHITELISTED_LINKS in "${LIST[@]}"; do
     if [[ "${URL}" == *"${WHITELISTED_LINKS}"* ]]; then
         WHITELISTED=true
         break
+    else
+        WHITELISTED=false
     fi
 done
 
 ## Print if link will be published, or not.
-if [ "${WHITELISTED}" == true ]; then
-    echo "[INFO] Download link will be published on channel."
-else
+if [ "${ADD_BLACKLIST}" == true ] || [ "${WHITELISTED}" == false ]; then
     echo "[INFO] Download link will not be published on channel."
+elif [ "${ADD_BLACKLIST}" == false ] && [ "${WHITELISTED}" == true ]; then
+    echo "[INFO] Download link will be published on channel."
 fi
 
 if [[ -f $URL ]]; then
@@ -854,7 +855,7 @@ commit_head=$(git rev-parse HEAD)
 commit_link="https://$GITLAB_SERVER/$ORG/$repo/commit/$commit_head"
 
 ## Only add this line in case URL is expected in the whitelist
-if [ "${WHITELISTED}" == true ]; then
+if [ "${WHITELISTED}" == true ] && [ "${ADD_BLACKLIST}" == false ] ; then
     link=" | <a href=\"${URL}\">Firmware</a>"
 fi
 
