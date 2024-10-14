@@ -60,7 +60,7 @@ View <a href=\"${BUILD_URL}consoleText\">console logs</a> for more."
         ## Aborted
         2)
         local string="<b>aborted!</b> (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)
-Branch already exists on <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">GitLab</a>."
+Branch already exists on <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">GitLab</a> (<code>$branch</code>)."
         ;;
     esac
 
