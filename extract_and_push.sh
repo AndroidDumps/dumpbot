@@ -259,6 +259,11 @@ else
     )
 
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting partitions...</code>" > /dev/null
+
+    # Set commonly used binary names
+    FSCK_EROFS="${HOME}/Firmware_extractor/tools/fsck.erofs"
+    EXT2RD="${HOME}/Firmware_extractor/tools/ext2rd"
+
     # Extract the images
     for p in "${PARTITIONS[@]}"; do
         if [[ -f $p.img ]]; then
@@ -267,22 +272,29 @@ else
 
             # Try to extract images via 'fsck.erofs'
             echo "[INFO] Extracting '$p' via 'fsck.erofs'..."
-            "${HOME}"/Firmware_extractor/tools/fsck.erofs --extract="$p" "$p".img >> /dev/null 2>&1 || {
+            ${FSCK_EROFS} --extract="$p" "$p".img >> /dev/null 2>&1 || {
                 echo "[WARN] Extraction via 'fsck.erofs' failed."
 
-                # Uses '7zz' if images could not be extracted via 'fsck.erofs'
-                echo "[INFO] Extracting '$p' via '7zz'..."
-                7zz -snld x "$p".img -y -o"$p"/ > /dev/null || {
-                    echo "[ERROR] Extraction via '7zz' failed."
+                # Uses 'ext2rd' if images could not be extracted via 'fsck.erofs'
+                echo "[INFO] Extracting '$p' via 'ext2rd'..."
+                ${EXT2RD} "$p".img ./:"${p}" > /dev/null || {
+                    echo "[WARN] Extraction via 'ext2rd' failed."
 
-                    # Only abort if we're at the first occourence
-                    if [[ "${p}" == "${PARTITIONS[0]}" ]]; then
-                        # In case of failure, bail out and abort dumping altogether
-                        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
-                        terminate 1
-                    fi
+                    # Uses '7zz' if images could not be extracted via 'ext2rd'
+                    echo "[INFO] Extracting '$p' via '7zz'..."
+                    7zz -snld x "$p".img -y -o"$p"/ > /dev/null || {
+                        echo "[ERROR] Extraction via '7zz' failed."
+
+                        # Only abort if we're at the first occourence
+                        if [[ "${p}" == "${PARTITIONS[0]}" ]]; then
+                            # In case of failure, bail out and abort dumping altogether
+                            sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
+                            terminate 1
+                        fi
+                    }
                 }
             }
+
             # Clean-up
             rm -f "$p".img
         fi
