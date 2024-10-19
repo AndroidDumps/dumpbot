@@ -6,12 +6,13 @@ from dumpyarabot import schemas
 from dumpyarabot.config import settings
 
 
-async def get_jenkins_builds() -> List[schemas.JenkinsBuild]:
-    """Fetch all builds from Jenkins."""
+async def get_jenkins_builds(job_name: str) -> List[schemas.JenkinsBuild]:
+    """Fetch all builds from Jenkins for a specific job."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{settings.JENKINS_URL}/job/dumpyara/api/json",
+            f"{settings.JENKINS_URL}/job/{job_name}/api/json",
             params={"tree": "allBuilds[number,result,actions[parameters[name,value]]]"},
+            auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
         )
         response.raise_for_status()
         return [schemas.JenkinsBuild(**build) for build in response.json()["allBuilds"]]
@@ -19,13 +20,14 @@ async def get_jenkins_builds() -> List[schemas.JenkinsBuild]:
 
 async def check_existing_build(args: schemas.DumpArguments) -> Tuple[bool, str]:
     """Check if a build with the given parameters already exists."""
-    builds = await get_jenkins_builds()
+    job_name = "privdump" if args.use_privdump else "dumpyara"
+    builds = await get_jenkins_builds(job_name)
 
     for build in builds:
         if _is_matching_build(build, args):
             return _get_build_status(build)
 
-    return False, "No matching build found. A new build will be started."
+    return False, f"No matching build found. A new {job_name} build will be started."
 
 
 def _is_matching_build(
@@ -64,9 +66,10 @@ def _get_build_status(build: schemas.JenkinsBuild) -> Tuple[bool, str]:
 
 async def call_jenkins(args: schemas.DumpArguments) -> str:
     """Call Jenkins to start a new build."""
+    job_name = "privdump" if args.use_privdump else "dumpyara"
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{settings.JENKINS_URL}/job/dumpyara/buildWithParameters",
+            f"{settings.JENKINS_URL}/job/{job_name}/buildWithParameters",
             params={
                 "URL": args.url.unicode_string(),
                 "USE_ALT_DUMPER": args.use_alt_dumper,
@@ -75,19 +78,20 @@ async def call_jenkins(args: schemas.DumpArguments) -> str:
             auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
         )
         response.raise_for_status()
-        return "Job started"
+        return f"{job_name.capitalize()} job started"
 
 
-async def cancel_jenkins_job(job_id: str) -> str:
+async def cancel_jenkins_job(job_id: str, use_privdump: bool = False) -> str:
     """Cancel a Jenkins job."""
+    job_name = "privdump" if use_privdump else "dumpyara"
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{settings.JENKINS_URL}/job/dumpyara/{job_id}/stop",
+            f"{settings.JENKINS_URL}/job/{job_name}/{job_id}/stop",
             auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
             follow_redirects=True,
         )
         if response.status_code == 200:
-            return f"Job with ID {job_id} has been cancelled."
+            return f"Job with ID {job_id} has been cancelled in {job_name}."
         elif response.status_code == 404:
             response = await client.post(
                 f"{settings.JENKINS_URL}/queue/cancelItem",
@@ -96,5 +100,8 @@ async def cancel_jenkins_job(job_id: str) -> str:
                 follow_redirects=True,
             )
             if response.status_code == 204:
-                return f"Job with ID {job_id} has been removed from the queue."
-        return f"Failed to cancel job with ID {job_id}. Status code: {response.status_code}."
+                return (
+                    f"Job with ID {job_id} has been removed from the {job_name} queue."
+                )
+
+        return f"Failed to cancel job with ID {job_id} in {job_name}. Job not found or already completed."

@@ -13,3 +13,4 @@ class DumpArguments(BaseModel):
     url: AnyHttpUrl
     use_alt_dumper: bool
     add_blacklist: bool
+    use_privdump: bool
