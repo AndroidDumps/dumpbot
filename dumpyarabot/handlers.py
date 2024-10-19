@@ -48,6 +48,10 @@ async def dump(
     add_blacklist = "b" in context.args[1:] if len(context.args) > 1 else False
     use_privdump = "p" in context.args[1:] if len(context.args) > 1 else False
 
+    # Delete the user's message immediately if privdump is used
+    if use_privdump:
+        await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
+
     # Try to check for existing build and call jenkins if necessary
     try:
         dump_args = schemas.DumpArguments(
@@ -60,7 +64,7 @@ async def dump(
         if not force:
             initial_message = await context.bot.send_message(
                 chat_id=chat.id,
-                reply_to_message_id=message.message_id,
+                reply_to_message_id=None if use_privdump else message.message_id,
                 text="Checking for existing builds...",
             )
 
@@ -88,7 +92,7 @@ async def dump(
     # Reply to the user with whatever the status is
     await context.bot.send_message(
         chat_id=chat.id,
-        reply_to_message_id=message.message_id,
+        reply_to_message_id=None if use_privdump else message.message_id,
         text=response_text,
     )
 
