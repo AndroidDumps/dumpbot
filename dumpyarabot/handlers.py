@@ -33,12 +33,12 @@ async def dump(
 
     # Ensure that we had some arguments passed
     if not context.args:
-        usage = "Usage: `/dump [URL] [a|f|b]`\nURL: required, a: alt dumper, f: force, b: blacklist"
+        usage = "Usage: `/dump [URL] [a|f|b|p]`\nURL: required, a: alt dumper, f: force, b: blacklist, p: use privdump"
         await context.bot.send_message(
             chat_id=chat.id,
             reply_to_message_id=message.message_id,
             text=usage,
-            parse_mode='Markdown',
+            parse_mode="Markdown",
         )
         return
 
@@ -46,17 +46,25 @@ async def dump(
     use_alt_dumper = "a" in context.args[1:] if len(context.args) > 1 else False
     force = "f" in context.args[1:] if len(context.args) > 1 else False
     add_blacklist = "b" in context.args[1:] if len(context.args) > 1 else False
+    use_privdump = "p" in context.args[1:] if len(context.args) > 1 else False
+
+    # Delete the user's message immediately if privdump is used
+    if use_privdump:
+        await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
 
     # Try to check for existing build and call jenkins if necessary
     try:
         dump_args = schemas.DumpArguments(
-            url=url, use_alt_dumper=use_alt_dumper, add_blacklist=add_blacklist
+            url=url,
+            use_alt_dumper=use_alt_dumper,
+            add_blacklist=add_blacklist,
+            use_privdump=use_privdump,
         )
 
         if not force:
             initial_message = await context.bot.send_message(
                 chat_id=chat.id,
-                reply_to_message_id=message.message_id,
+                reply_to_message_id=None if use_privdump else message.message_id,
                 text="Checking for existing builds...",
             )
 
@@ -84,13 +92,13 @@ async def dump(
     # Reply to the user with whatever the status is
     await context.bot.send_message(
         chat_id=chat.id,
-        reply_to_message_id=message.message_id,
+        reply_to_message_id=None if use_privdump else message.message_id,
         text=response_text,
     )
 
 
 async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler for the /cancel_dump command."""
+    """Handler for the /cancel command."""
     chat: Optional[Chat] = update.effective_chat
     message: Optional[Message] = update.effective_message
     user = update.effective_user
@@ -119,20 +127,27 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     # Ensure that we had some arguments passed
     if not context.args:
+        usage = (
+            "Usage: `/cancel [job_id] [p]`\njob_id: required, p: cancel privdump job"
+        )
         await context.bot.send_message(
             chat_id=chat.id,
             reply_to_message_id=message.message_id,
-            text="Please provide a job ID.",
+            text=usage,
+            parse_mode="Markdown",
         )
         return
 
     job_id = context.args[0]
-    response_message = await utils.cancel_jenkins_job(job_id)
+    use_privdump = "p" in context.args[1:] if len(context.args) > 1 else False
+
+    response_message = await utils.cancel_jenkins_job(job_id, use_privdump)
     await context.bot.send_message(
         chat_id=chat.id,
         reply_to_message_id=message.message_id,
         text=response_message,
     )
+
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat: Optional[Chat] = update.effective_chat

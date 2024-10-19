@@ -120,8 +120,12 @@ if [[ -f $URL ]]; then
         sendTG() { :; } && sendTG_edit_wrapper() { :; }
     fi
 else
-    MESSAGE="<code>Started</code> <a href=\"${URL}\">dump</a> <code>on</code> <a href=\"$BUILD_URL\">jenkins</a>
-<b>Job ID:</b> <code>$BUILD_ID</code>."
+    if [[ "$JOB_NAME" == *"privdump"* ]]; then
+        MESSAGE="<code>Started private dump on</code> <a href=\"$BUILD_URL\">jenkins</a>"
+    else
+        MESSAGE="<code>Started</code> <a href=\"${URL}\">dump</a> <code>on</code> <a href=\"$BUILD_URL\">jenkins</a>"
+    fi
+    MESSAGE+=$'\n'"<b>Job ID:</b> <code>$BUILD_ID</code>."
     if _json="$(sendTG normal "${MESSAGE}")"; then
         # grab initial message id
         MESSAGE_ID="$(jq ".result.message_id" <<< "${_json}")"
