@@ -137,7 +137,7 @@ else
         # For Xiaomi: replace '${URL}' with (one of) the fastest mirror
         *"d.miui.com"*)
             # Do not run this loop in case we're already using one of the reccomended mirrors
-            if [[ "$(echo "${URL}" | grep -qE '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')" -eq 1 ]]; then
+            if [[ "$(echo "${URL}" | grep -qE '(cdnorg|bkt-sgp-miui-ota-update-alisgp)')" -eq 0 ]]; then
                 # Set '${URL_ORIGINAL}' and '${FILE_PATH}' in case we might need to roll back
                 URL_ORIGINAL=$(echo "${URL}" | sed -E 's|(https://[^/]+).*|\1|')
                 FILE_PATH=${URL#*d.miui.com/}
