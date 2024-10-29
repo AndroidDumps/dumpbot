@@ -165,7 +165,7 @@ else
             fi
         ;;
         # For Pixeldrain: replace the link with a direct one
-        *"pixeldrain.com"*)
+        *"pixeldrain.com/u"*)
             echo "[INFO] Replacing with best available mirror."
             URL="https://pd.cybar.xyz/${URL##*/}"
         ;;
