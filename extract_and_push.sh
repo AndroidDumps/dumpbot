@@ -169,6 +169,10 @@ else
             echo "[INFO] Replacing with best available mirror."
             URL="https://pd.cybar.xyz/${URL##*/}"
         ;;
+        *"pixeldrain.com/d"*)
+            echo "[INFO] Replacing with direct download link."
+            URL="https://pixeldrain.com/api/filesystem/${URL##*/}"
+        ;;
     esac
 
     # Confirm download has started
