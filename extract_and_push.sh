@@ -4,8 +4,6 @@
 [[ -z ${GITLAB_SERVER} ]] && GITLAB_SERVER="dumps.tadiphone.dev"
 [[ -z ${PUSH_HOST} ]] && PUSH_HOST="dumps"
 [[ -z $ORG ]] && ORG="dumps"
-[[ -z ${ADD_BLACKLIST} ]] && ADD_BLACKLIST="false"
-[[ -z ${USE_ALT_DUMPER} ]] && USE_ALT_DUMPER="false"
 
 CHAT_ID="-1001412293127"
 
