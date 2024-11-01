@@ -344,13 +344,11 @@ if [[ -f "${PWD}/boot.img" ]]; then
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
-    # Do not run 'dtc' if no DTB was found
-    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+    # Decompile '.dtb' to '.dts'
+    if find "${OUTPUT}/dtb" -name "*.dtb"; then
         echo "[INFO] Decompiling device-tree blobs..."
-        # Decompile '.dtb' to '.dts'
-        for dtb in $(find "${PWD}/boot/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
-        done
+        find "${OUTPUT}/dtb" -type f \
+            -exec sh -c 'dtc -q -I dtb -O dts "${1}" >> "${OUTPUT}/dts/$(basename "${1}" | sed 's/\.dtb/.dts/')"' shell {} \;
     fi
 
     # Extract 'ikconfig'
@@ -415,12 +413,10 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
-    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+    if find "${OUTPUT}/dtb" -name "*.dtb"; then
         echo "[INFO] Decompiling device-tree blobs..."
-        # Decompile '.dtb' to '.dts'
-        for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
-        done
+        find "${OUTPUT}/dtb" -type f \
+            -exec sh -c 'dtc -q -I dtb -O dts "${1}" >> "${OUTPUT}/dts/$(basename "${1}" | sed 's/\.dtb/.dts/')"' shell {} \;
     fi
 
     # Python rewrite automatically extracts such partitions
@@ -462,12 +458,10 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
-    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+    if find "${OUTPUT}/dtb" -name "*.dtb"; then
         echo "[INFO] Decompiling device-tree blobs..."
-        # Decompile '.dtb' to '.dts'
-        for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
-        done
+        find "${OUTPUT}/dtb" -type f \
+            -exec sh -c 'dtc -q -I dtb -O dts "${1}" >> "${OUTPUT}/dts/$(basename "${1}" | sed 's/\.dtb/.dts/')"' shell {} \;
     fi
 
     # Python rewrite automatically extracts such partitions
@@ -542,9 +536,8 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
 
     # Decompile '.dtb' to '.dts'
     echo "[INFO] Decompiling device-tree blobs..."
-    for dtb in $(find "${OUTPUT}" -type f); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
-    done
+    find "${OUTPUT}" -type f \
+        -exec sh -c 'dtc -q -I dtb -O dts "${1}" >> "${OUTPUT}/dts/$(basename "${1}" | sed 's/\.dtb/.dts/')"' shell {} \;
 fi
 
 # Oppo/Realme/OnePlus devices have some images in folders, extract those
