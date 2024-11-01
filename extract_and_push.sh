@@ -340,22 +340,10 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
-        mkdir -p "${OUTPUT}/ramdisk"
-
-        # Unpack 'boot.img' through 'unpackbootimg'
-        echo "[INFO] Extracting 'boot.img' content..."
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
-
-        # Decrompress 'boot.img-ramdisk'
-        ## Run only if 'boot.img-ramdisk' is not empty
-        if file boot.img-ramdisk | grep -q LZ4 || file boot.img-ramdisk | grep -q gzip; then
-            echo "[INFO] Extracting ramdisk..."
-            unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
-            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
-
-            ## Clean-up
-            rm -rf "${OUTPUT}/ramdisk.lz4"
-        fi
+        uv run --with dumpyara - <<EOF
+from dumpyara.utils.bootimg import extract_bootimg
+extract_bootimg("${IMAGE}", "${OUTPUT}")
+EOF
     fi
 
     # Extract 'ikconfig'
