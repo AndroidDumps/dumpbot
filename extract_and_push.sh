@@ -327,7 +327,6 @@ UNPACKBOOTIMG="${HOME}/Firmware_extractor/tools/unpackbootimg"
 
 # Extract 'boot.img'
 if [[ -f "${PWD}/boot.img" ]]; then
-    echo "[INFO] Extracting 'boot.img' content"
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/boot.img
@@ -335,49 +334,12 @@ if [[ -f "${PWD}/boot.img" ]]; then
     ## Output
     OUTPUT=${PWD}/boot
 
-    # Create necessary directories
-    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
-
-    # Extract device-tree blobs from 'boot.img'
-    echo "[INFO] Extracting device-tree blobs..."
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
-    rm -rf "${OUTPUT}/dtb/00_kernel"
-
-    # Do not run 'dtc' if no DTB was found
-    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
-        echo "[INFO] Decompiling device-tree blobs..."
-        # Decompile '.dtb' to '.dts'
-        for dtb in $(find "${PWD}/boot/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
-        done
-    fi
-
-    # Extract 'ikconfig'
-    echo "[INFO] Extract 'ikconfig'..."
-    if command -v extract-ikconfig > /dev/null ; then
-        extract-ikconfig "${PWD}"/boot.img > "${PWD}"/ikconfig || {
-            echo "[ERROR] Failed to generate 'ikconfig'"
-        }
-    fi
-
-    # Kallsyms
-    echo "[INFO] Generating 'kallsyms.txt'..."
-    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 kallsyms-finder "${IMAGE}" > kallsyms.txt || {
-        echo "[ERROR] Failed to generate 'kallsyms.txt'"
-    }
-
-    # ELF
-    echo "[INFO] Extracting 'boot.elf'..."
-    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null || {
-        echo "[ERROR] Failed to generate 'boot.elf'"
-    }
-
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'boot.img' through 'unpackbootimg'
-        echo "[INFO] Extracting 'boot.img' to 'boot/'..."
+        echo "[INFO] Extracting 'boot.img' content..."
         ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'boot.img-ramdisk'
@@ -391,11 +353,47 @@ if [[ -f "${PWD}/boot.img" ]]; then
             rm -rf "${OUTPUT}/ramdisk.lz4"
         fi
     fi
+
+    # Extract 'ikconfig'
+    echo "[INFO] Extract 'ikconfig'..."
+    if command -v extract-ikconfig > /dev/null ; then
+        extract-ikconfig "${PWD}"/boot.img > "${PWD}"/ikconfig || {
+            echo "[ERROR] Failed to generate 'ikconfig'"
+        }
+    fi
+
+    # Generate non-stack symbols
+    echo "[INFO] Generating 'kallsyms.txt'..."
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 kallsyms-finder "${IMAGE}" > kallsyms.txt || {
+        echo "[ERROR] Failed to generate 'kallsyms.txt'"
+    }
+
+    # Generate analyzable '.elf'
+    echo "[INFO] Extracting 'boot.elf'..."
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null || {
+        echo "[ERROR] Failed to generate 'boot.elf'"
+    }
+
+    # Create necessary directories
+    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
+
+    # Extract device-tree blobs from 'boot.img'
+    echo "[INFO] boot.img: Extracting device-tree blobs..."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
+    rm -rf "${OUTPUT}/dtb/00_kernel"
+
+    # Do not run 'dtc' if no DTB was found
+    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+        echo "[INFO] Decompiling device-tree blobs..."
+        # Decompile '.dtb' to '.dts'
+        for dtb in $(find "${PWD}/boot/dtb" -type f); do
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
+        done
+    fi
 fi
 
 # Extract 'vendor_boot.img'
 if [[ -f "${PWD}/vendor_boot.img" ]]; then
-    echo "[INFO] Extracting 'vendor_boot.img' content"
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/vendor_boot.img
@@ -403,29 +401,12 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     ## Output
     OUTPUT=${PWD}/vendor_boot
 
-    # Create necessary directories
-    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb" "${OUTPUT}/ramdisk"
-
-    # Extract device-tree blobs from 'vendor_boot.img'
-    echo "[INFO] Extracting device-tree blobs..."
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
-    rm -rf "${OUTPUT}/dtb/00_kernel"
-
-    # Decompile '.dtb' to '.dts'
-    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
-        echo "[INFO] Decompiling device-tree blobs..."
-        # Decompile '.dtb' to '.dts'
-        for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
-        done
-    fi
-
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         ## Unpack 'vendor_boot.img' through 'unpackbootimg'
-        echo "[INFO] Extracting 'vendor_boot.img' to 'vendor_boot/'..."
+        echo "[INFO] Extracting 'vendor_boot.img' content..."
         ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'vendor_boot.img-vendor_ramdisk'
@@ -436,24 +417,12 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
     fi
-fi
-
-# Extract 'vendor_kernel_boot.img'
-if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
-    echo "[INFO] Extracting 'vendor_kernel_boot.img' content"
-
-    # Set a variable for each path
-    ## Image
-    IMAGE=${PWD}/vendor_kernel_boot.img
-
-    ## Output
-    OUTPUT=${PWD}/vendor_kernel_boot
 
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
 
-    # Extract device-tree blobs from 'vendor_kernel_boot.img'
-    echo "[INFO] Extracting device-tree blobs..."
+    # Extract device-tree blobs from 'vendor_boot.img'
+    echo "[INFO] vendor_boot.img: Extracting device-tree blobs..."
     extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
@@ -465,13 +434,23 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
             dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
         done
     fi
+fi
+
+# Extract 'vendor_kernel_boot.img'
+if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
+    # Set a variable for each path
+    ## Image
+    IMAGE=${PWD}/vendor_kernel_boot.img
+
+    ## Output
+    OUTPUT=${PWD}/vendor_kernel_boot
 
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
-        echo "[INFO] Extracting 'vendor_kernel_boot.img' to 'vendor_kernel_boot/'..."
+        echo "[INFO] Extracting 'vendor_kernel_boot.img' content..."
         ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
@@ -482,12 +461,27 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
     fi
+
+    # Create necessary directories
+    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
+
+    # Extract device-tree blobs from 'vendor_kernel_boot.img'
+    echo "[INFO] vendor_kernel_boot.img: Extracting device-tree blobs..."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
+    rm -rf "${OUTPUT}/dtb/00_kernel"
+
+    # Decompile '.dtb' to '.dts'
+    if [ "$(find "${OUTPUT}/dtb" -name "*.dtb")" ]; then
+        echo "[INFO] Decompiling device-tree blobs..."
+        # Decompile '.dtb' to '.dts'
+        for dtb in $(find "${OUTPUT}/dtb" -type f); do
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
+        done
+    fi
 fi
 
 # Extract 'init_boot.img'
-if [[ -f "${PWD}/init_boot.img" ]]; then
-    echo "[INFO] Extracting 'init_boot.img' content"
-
+if [[ -f "${PWD}/init_boot.img" ]] && [[ "${USE_ALT_DUMPER}" == "false" ]]; then
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/init_boot.img
@@ -496,30 +490,23 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     OUTPUT=${PWD}/init_boot
 
     # Create necessary directories
-    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/ramdisk"
 
-    # Python rewrite automatically extracts such partitions
-    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
-        mkdir -p "${OUTPUT}/ramdisk"
+    # Unpack 'init_boot.img' through 'unpackbootimg'
+    echo "[INFO] Extracting 'init_boot.img' content..."
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
 
-        # Unpack 'init_boot.img' through 'unpackbootimg'
-        echo "[INFO] Extracting 'init_boot.img' to 'init_boot/'..."
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
+    # Decrompress 'init_boot.img-ramdisk'
+    echo "[INFO] Extracting ramdisk..."
+    unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
+    7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
 
-        # Decrompress 'init_boot.img-ramdisk'
-        echo "[INFO] Extracting ramdisk..."
-        unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
-        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
-
-        ## Clean-up
-        rm -rf "${OUTPUT}/ramdisk.lz4"
-    fi
+    ## Clean-up
+    rm -rf "${OUTPUT}/ramdisk.lz4"
 fi
 
 # Extract 'dtbo.img'
 if [[ -f "${PWD}/dtbo.img" ]]; then
-    echo "[INFO] Extracting 'dtbo.img' content"
-
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/dtbo.img
@@ -531,7 +518,7 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
     mkdir -p "${OUTPUT}/dts"
 
     # Extract device-tree blobs from 'dtbo.img'
-    echo "[INFO] Extracting device-tree blobs..."
+    echo "[INFO] dbto.img: Extracting device-tree blobs..."
     extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/00_kernel"
 
