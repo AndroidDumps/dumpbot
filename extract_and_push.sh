@@ -138,7 +138,7 @@ else
             if ! echo "${URL}" | rg -q 'cdnorg|bkt-sgp-miui-ota-update-alisgp'; then
                 # Set '${URL_ORIGINAL}' and '${FILE_PATH}' in case we might need to roll back
                 URL_ORIGINAL=$(echo "${URL}" | sed -E 's|(https://[^/]+).*|\1|')
-                FILE_PATH=${URL#*d.miui.com/}
+                FILE_PATH=$(echo ${URL#*d.miui.com/} | sed 's/?.*//')
 
                 # Array of different possible mirrors
                 MIRRORS=(
