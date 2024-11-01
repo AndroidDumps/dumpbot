@@ -336,8 +336,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
     OUTPUT=${PWD}/boot
 
     # Create necessary directories
-    mkdir -p "${OUTPUT}/dts"
-    mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
 
     # Extract device-tree blobs from 'boot.img'
     echo "[INFO] Extracting device-tree blobs..."
@@ -403,9 +402,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     OUTPUT=${PWD}/vendor_boot
 
     # Create necessary directories
-    mkdir -p "${OUTPUT}/dts"
-    mkdir -p "${OUTPUT}/dtb"
-    mkdir -p "${OUTPUT}/ramdisk"
+    mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb" "${OUTPUT}/ramdisk"
 
     # Extract device-tree blobs from 'vendor_boot.img'
     echo "[INFO] Extracting device-tree blobs..."
@@ -449,8 +446,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     OUTPUT=${PWD}/vendor_kernel_boot
 
     # Create necessary directories
-    mkdir -p "${OUTPUT}/dts"
-    mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts" mkdir -p "${OUTPUT}/dtb"
 
     # Extract device-tree blobs from 'vendor_kernel_boot.img'
     echo "[INFO] Extracting device-tree blobs..."
@@ -494,8 +490,7 @@ if [[ -f "${PWD}/init_boot.img" ]]; then
     OUTPUT=${PWD}/init_boot
 
     # Create necessary directories
-    mkdir -p "${OUTPUT}/dts"
-    mkdir -p "${OUTPUT}/dtb"
+    mkdir -p "${OUTPUT}/dts" mkdir -p "${OUTPUT}/dtb"
 
     # Python rewrite automatically extracts such partitions
     if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
