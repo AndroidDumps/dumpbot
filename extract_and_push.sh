@@ -374,7 +374,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
     }
 
     # Python rewrite automatically extracts such partitions
-    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+    if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'boot.img' through 'unpackbootimg'
@@ -424,7 +424,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
     fi
 
     # Python rewrite automatically extracts such partitions
-    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+    if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         ## Unpack 'vendor_boot.img' through 'unpackbootimg'
@@ -471,7 +471,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
     fi
 
     # Python rewrite automatically extracts such partitions
-    if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+    if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
         mkdir -p "${OUTPUT}/ramdisk"
 
         # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
