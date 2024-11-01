@@ -233,19 +233,12 @@ if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
         terminate 1
     }
 else
-    # Try to minimize these, atleast "third-party" tools
-    EXTERNAL_TOOLS=(
-        https://github.com/AndroidDumps/Firmware_extractor
-    )
-
-    for tool_url in "${EXTERNAL_TOOLS[@]}"; do
-        tool_path="${HOME}/${tool_url##*/}"
-        if ! [[ -d ${tool_path} ]]; then
-            git clone -q "${tool_url}" "${tool_path}" >> /dev/null 2>&1
-        else
-            git -C "${tool_path}" pull >> /dev/null 2>&1  
-        fi
-    done
+    # Clone necessary tools
+    if ! [[ -d "${HOME}/Firmware_extractor" ]]; then
+        git clone -q https://github.com/AndroidDumps/Firmware_extractor "${HOME}/Firmware_extractor"
+    else
+        git -C "${HOME}/Firmware_extractor" pull -q
+    fi
 
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with alternative dumper..." > /dev/null
     bash "${HOME}"/Firmware_extractor/extractor.sh "${FILE}" "${PWD}" || {
