@@ -340,14 +340,16 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
         # Unpack 'boot.img' through 'unpackbootimg'
         echo "[INFO] Extracting 'boot.img' content..."
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || \
+            echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'boot.img-ramdisk'
         ## Run only if 'boot.img-ramdisk' is not empty
         if file boot.img-ramdisk | grep -q LZ4 || file boot.img-ramdisk | grep -q gzip; then
             echo "[INFO] Extracting ramdisk..."
             unlz4 "${OUTPUT}/boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
-            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
+            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || \
+                echo "[ERROR] Failed to extract ramdisk."
 
             ## Clean-up
             rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -364,22 +366,21 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
     # Generate non-stack symbols
     echo "[INFO] Generating 'kallsyms.txt'..."
-    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 kallsyms-finder "${IMAGE}" > kallsyms.txt || {
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 kallsyms-finder "${IMAGE}" > kallsyms.txt || \
         echo "[ERROR] Failed to generate 'kallsyms.txt'"
-    }
 
     # Generate analyzable '.elf'
     echo "[INFO] Extracting 'boot.elf'..."
-    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null || {
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null ||
         echo "[ERROR] Failed to generate 'boot.elf'"
-    }
 
     # Create necessary directories
     mkdir -p "${OUTPUT}/dts" "${OUTPUT}/dtb"
 
     # Extract device-tree blobs from 'boot.img'
     echo "[INFO] boot.img: Extracting device-tree blobs..."
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || \
+        echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Do not run 'dtc' if no DTB was found
@@ -387,7 +388,8 @@ if [[ -f "${PWD}/boot.img" ]]; then
         echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${PWD}/boot/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || \
+                echo "[ERROR] Failed to decompile."
         done
     fi
 fi
@@ -407,12 +409,14 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
 
         ## Unpack 'vendor_boot.img' through 'unpackbootimg'
         echo "[INFO] Extracting 'vendor_boot.img' content..."
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || \
+            echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'vendor_boot.img-vendor_ramdisk'
         echo "[INFO] Extracting ramdisk..."
         unlz4 "${OUTPUT}/vendor_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
-        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || \
+            echo "[ERROR] Failed to extract ramdisk."
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -423,7 +427,8 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
 
     # Extract device-tree blobs from 'vendor_boot.img'
     echo "[INFO] vendor_boot.img: Extracting device-tree blobs..."
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || \
+        echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
@@ -431,7 +436,8 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
         echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || \
+                echo "[ERROR] Failed to decompile."
         done
     fi
 fi
@@ -451,12 +457,14 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
 
         # Unpack 'vendor_kernel_boot.img' through 'unpackbootimg'
         echo "[INFO] Extracting 'vendor_kernel_boot.img' content..."
-        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || \
+            echo "[ERROR] Extraction unsuccessful."
 
         # Decrompress 'vendor_kernel_boot.img-vendor_ramdisk'
         echo "[INFO] Extracting ramdisk..."
         unlz4 "${OUTPUT}/vendor_kernel_boot.img-vendor_ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
-        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
+        7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || \
+            echo "[ERROR] Failed to extract ramdisk."
 
         ## Clean-up
         rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -467,7 +475,8 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
 
     # Extract device-tree blobs from 'vendor_kernel_boot.img'
     echo "[INFO] vendor_kernel_boot.img: Extracting device-tree blobs..."
-    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || echo "[INFO] No device-tree blobs found."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}/dtb" > /dev/null || \
+        echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/dtb/00_kernel"
 
     # Decompile '.dtb' to '.dts'
@@ -475,7 +484,8 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
         echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || \
+                echo "[ERROR] Failed to decompile."
         done
     fi
 fi
@@ -494,12 +504,14 @@ if [[ -f "${PWD}/init_boot.img" ]] && [[ "${USE_ALT_DUMPER}" == "false" ]]; then
 
     # Unpack 'init_boot.img' through 'unpackbootimg'
     echo "[INFO] Extracting 'init_boot.img' content..."
-    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[ERROR] Extraction unsuccessful."
+    ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || \
+        echo "[ERROR] Extraction unsuccessful."
 
     # Decrompress 'init_boot.img-ramdisk'
     echo "[INFO] Extracting ramdisk..."
     unlz4 "${OUTPUT}/init_boot.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
-    7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || echo "[ERROR] Failed to extract ramdisk."
+    7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || \
+        echo "[ERROR] Failed to extract ramdisk."
 
     ## Clean-up
     rm -rf "${OUTPUT}/ramdisk.lz4"
@@ -519,13 +531,15 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
 
     # Extract device-tree blobs from 'dtbo.img'
     echo "[INFO] dbto.img: Extracting device-tree blobs..."
-    extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null || echo "[INFO] No device-tree blobs found."
+    extract-dtb "${IMAGE}" -o "${OUTPUT}" > /dev/null || \
+        echo "[INFO] No device-tree blobs found."
     rm -rf "${OUTPUT}/00_kernel"
 
     # Decompile '.dtb' to '.dts'
     echo "[INFO] Decompiling device-tree blobs..."
     for dtb in $(find "${OUTPUT}" -type f); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
+        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || \
+            echo "[ERROR] Failed to decompile."
     done
 fi
 
