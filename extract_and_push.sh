@@ -387,7 +387,7 @@ if [[ -f "${PWD}/boot.img" ]]; then
         echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${PWD}/boot/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
         done
     fi
 fi
@@ -431,7 +431,7 @@ if [[ -f "${PWD}/vendor_boot.img" ]]; then
         echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
         done
     fi
 fi
@@ -475,7 +475,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
         echo "[INFO] Decompiling device-tree blobs..."
         # Decompile '.dtb' to '.dts'
         for dtb in $(find "${OUTPUT}/dtb" -type f); do
-            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
+            dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
         done
     fi
 fi
@@ -525,7 +525,7 @@ if [[ -f "${PWD}/dtbo.img" ]]; then
     # Decompile '.dtb' to '.dts'
     echo "[INFO] Decompiling device-tree blobs..."
     for dtb in $(find "${OUTPUT}" -type f); do
-        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" | sed 's/\.dtb/.dts/')" || echo "[ERROR] Failed to decompile."
+        dtc -q -I dtb -O dts "${dtb}" >> "${OUTPUT}/dts/$(basename "${dtb}" .dtb).dts" || echo "[ERROR] Failed to decompile."
     done
 fi
 
