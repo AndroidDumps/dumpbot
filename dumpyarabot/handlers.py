@@ -48,10 +48,12 @@ async def dump(
         return
 
     url = context.args[0]
-    use_alt_dumper = "a" in context.args[1:] if len(context.args) > 1 else False
-    force = "f" in context.args[1:] if len(context.args) > 1 else False
-    add_blacklist = "b" in context.args[1:] if len(context.args) > 1 else False
-    use_privdump = "p" in context.args[1:] if len(context.args) > 1 else False
+    options = "".join("".join(context.args[1:]).split())
+
+    use_alt_dumper = "a" in options
+    force = "f" in options
+    add_blacklist = "b" in options
+    use_privdump = "p" in options
 
     console.print(f"[green]Dump request:[/green]")
     console.print(f"  URL: {url}")
