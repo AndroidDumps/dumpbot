@@ -232,7 +232,7 @@ fi
 
 if [[ "${USE_ALT_DUMPER}" == "false" ]]; then
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with Python dumper..." > /dev/null
-    uvx dumpyara "${FILE}" -o "${PWD}" || {
+    uvx dumpyara -v "${FILE}" -o "${PWD}" || {
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extraction failed!</code>" > /dev/null
         terminate 1
     }
