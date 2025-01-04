@@ -739,13 +739,19 @@ description=$(rg -m1 -INoP --no-messages "(?<=^ro.build.description=).*" {system
 [[ -z ${description} ]] && description=$(rg -m1 -INoP --no-messages "(?<=^ro.system.build.description=).*" {system,system/system}/build*.prop)
 [[ -z ${description} ]] && description="$flavor $release $id $incremental $tags"
 
+# In case there's an additional space on the 'description', 
+# remove it as it prevents 'git' from creating a branch.
+if [[ $(echo "${description}" | head -c1) == " " ]]; then
+    description=$(echo "${description}" | sed s/'\s'//)
+fi
+
 is_ab=$(rg -m1 -INoP --no-messages "(?<=^ro.build.ab_update=).*" {system,system/system,vendor}/build*.prop)
 is_ab=$(echo "$is_ab" | head -1)
 [[ -z ${is_ab} ]] && is_ab="false"
 
 codename=$(echo "$codename" | tr ' ' '_')
 
-if [ -z "$oplus_pipeline_key" ];then
+if [ -z "$oplus_pipeline_key" ]; then
     branch=$(echo "$description" | head -1 | tr ' ' '-')
 else
     branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
