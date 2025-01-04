@@ -630,7 +630,7 @@ platform=$(rg -m1 -INoP --no-messages "(?<=^ro.board.platform=).*" {vendor,syste
 [[ -z ${platform} ]] && platform=$(rg -m1 -INoP --no-messages rg"(?<=^ro.system.board.platform=).*" {system,system/system}/build*.prop)
 platform=$(echo "$platform" | head -1)
 
-manufacturer=$(grep -oP "(?<=^ro.product.odm.manufacturer=).*" odm/etc/build*.prop)
+manufacturer=$(rg -m1 -INoP --no-messages "(?<=^ro.product.odm.manufacturer=).*" odm/etc/build*.prop)
 [[ -z ${manufacturer} ]] && manufacturer=$(rg -m1 -INoP --no-messages "(?<=^ro.product.manufacturer=).*" odm/etc/fingerprint/build.default.prop)
 [[ -z ${manufacturer} ]] && manufacturer=$(rg -m1 -INoP --no-messages "(?<=^ro.product.manufacturer=).*" my_product/build*.prop)
 [[ -z ${manufacturer} ]] && manufacturer=$(rg -m1 -INoP --no-messages "(?<=^ro.product.manufacturer=).*" my_manifest/build*.prop)
