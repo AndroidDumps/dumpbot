@@ -495,7 +495,7 @@ if [[ -f "${PWD}/vendor_kernel_boot.img" ]]; then
 fi
 
 # Extract 'init_boot.img'
-if [[ -f "${PWD}/init_boot.img" ]] && [[ "${USE_ALT_DUMPER}" == "false" ]]; then
+if [[ -f "${PWD}/init_boot.img" ]] && [[ "${USE_ALT_DUMPER}" == "true" ]]; then
     # Set a variable for each path
     ## Image
     IMAGE=${PWD}/init_boot.img
