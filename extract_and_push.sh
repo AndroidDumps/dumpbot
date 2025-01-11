@@ -241,7 +241,7 @@ else
     if ! [[ -d "${HOME}/Firmware_extractor" ]]; then
         git clone -q https://github.com/AndroidDumps/Firmware_extractor "${HOME}/Firmware_extractor"
     else
-        git -C "${HOME}/Firmware_extractor" pull -q
+        git -C "${HOME}/Firmware_extractor" pull -q --rebase
     fi
 
     sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"Extracting firmware with alternative dumper..." > /dev/null
