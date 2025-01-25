@@ -148,6 +148,7 @@ else
                 MIRRORS=(
                     "https://cdnorg.d.miui.com"
                     "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com"
+                    "https://bn.d.miui.com"
                     "${URL_ORIGINAL}"
                 )
 
