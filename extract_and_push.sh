@@ -195,7 +195,7 @@ else
             uvx gdown@5.2.0 -q "${URL}" --fuzzy > /dev/null || downloadError
         ;;
         *mediafire.com*)
-           uvx --from git+https://github.com/Juvenal-Yescas/mediafire-dl@5873ecf1601f1cedc10a933a3a00d340d0f02db3 mediafire-dl "${URL}" > /dev/null || downloadError
+           uvx --from git+https://github.com/Juvenal-Yescas/mediafire-dl@master mediafire-dl "${URL}" > /dev/null || downloadError
         ;;
         *mega.nz*)
             megatools dl "${URL}" > /dev/null || downloadError
@@ -371,12 +371,12 @@ if [[ -f "${PWD}/boot.img" ]]; then
 
     # Generate non-stack symbols
     echo "[INFO] Generating 'kallsyms.txt'..."
-    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 kallsyms-finder "${IMAGE}" > kallsyms.txt || \
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@master kallsyms-finder "${IMAGE}" > kallsyms.txt || \
         echo "[ERROR] Failed to generate 'kallsyms.txt'"
 
     # Generate analyzable '.elf'
     echo "[INFO] Extracting 'boot.elf'..."
-    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@da14e789596d493f305688e221e9e34ebf63cbb8 vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null ||
+    uvx --from git+https://github.com/marin-m/vmlinux-to-elf@master vmlinux-to-elf "${IMAGE}" boot.elf > /dev/null ||
         echo "[ERROR] Failed to generate 'boot.elf'"
 
     # Create necessary directories
