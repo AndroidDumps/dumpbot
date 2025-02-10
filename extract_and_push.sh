@@ -590,6 +590,7 @@ echo "[INFO] Extracting properties..."
 sendTG_edit_wrapper temporary "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting properties...</code>" > /dev/null
 
 oplus_pipeline_key=$(rg -m1 -INoP --no-messages "(?<=^ro.oplus.pipeline_key=).*" my_manifest/build*.prop)
+honor_product_base_version=$(rg -m1 -INoP --no-messages "(?<=^ro.comp.hl.product_base_version=).*" product_h/etc/prop/local*.prop)
 
 flavor=$(rg -m1 -INoP --no-messages "(?<=^ro.build.flavor=).*" {vendor,system,system/system}/build.prop)
 [[ -z ${flavor} ]] && flavor=$(rg -m1 -INoP --no-messages "(?<=^ro.vendor.build.flavor=).*" vendor/build*.prop)
@@ -754,10 +755,14 @@ is_ab=$(echo "$is_ab" | head -1)
 
 codename=$(echo "$codename" | tr ' ' '_')
 
-if [ -z "$oplus_pipeline_key" ]; then
-    branch=$(echo "$description" | head -1 | tr ' ' '-')
+# Append 'oplus_pipeline_key' in case it's set
+if [ -v oplus_pipeline_key ]; then
+    branch=$(echo "${description}"--"${oplus_pipeline_key}" | head -1 | tr ' ' '-')
+# Append 'honor_product_base_version' in case it's set
+elif [ -v honor_product_base_version ]; then
+    branch=$(echo "${description}"--"${honor_product_base_version}" | head -1 | tr ' ' '-')
 else
-    branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
+    branch=$(echo "$description" | head -1 | tr ' ' '-')
 fi
 
 repo_subgroup=$(echo "$brand" | tr '[:upper:]' '[:lower:]')
