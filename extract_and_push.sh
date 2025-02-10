@@ -780,7 +780,6 @@ release: ${release}
 id: ${id}
 incremental: ${incremental}
 tags: ${tags}
-oplus_pipeline_key: ${oplus_pipeline_key}
 fingerprint: ${fingerprint}
 brand: ${brand}
 codename: ${codename}
