@@ -808,9 +808,9 @@ echo "[INFO] Generating 'all_files.txt'..."
 find . -type f ! -name all_files.txt -and ! -path "*/aosp-device-tree/*" -printf '%P\n' | sort | grep -v ".git/" > ./all_files.txt
 
 # Check whether the subgroup exists or not
-if ! group_id_json="$(curl --compressed -sH --fail-with-body "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups/$ORG%2f$repo_subgroup")"; then
+if ! group_id_json="$(curl --compressed --fail-with-body -sH "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups/$ORG%2f$repo_subgroup")"; then
     echo "Response: $group_id_json"
-    if ! group_id_json="$(curl --compressed -sH --fail-with-body "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups" -X POST -F name="${repo_subgroup^}" -F parent_id=64 -F path="${repo_subgroup}" -F visibility=public)"; then
+    if ! group_id_json="$(curl --compressed --fail-with-body -sH "Authorization: Bearer $DUMPER_TOKEN" "https://$GITLAB_SERVER/api/v4/groups" -X POST -F name="${repo_subgroup^}" -F parent_id=64 -F path="${repo_subgroup}" -F visibility=public)"; then
         echo "Creating subgroup for $repo_subgroup failed"
         echo "Response: $group_id_json"
         sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Creating subgroup for $repo_subgroup failed!</code>" > /dev/null
