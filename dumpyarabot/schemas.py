@@ -14,3 +14,4 @@ class DumpArguments(BaseModel):
     use_alt_dumper: bool
     add_blacklist: bool
     use_privdump: bool
+    initial_message_id: Optional[int] = None

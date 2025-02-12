@@ -7,6 +7,8 @@
 
 CHAT_ID="-1001412293127"
 
+[[ -z ${INITIAL_MESSAGE_ID} ]] && START_MESSAGE_ID="" || START_MESSAGE_ID="${INITIAL_MESSAGE_ID}"
+
 # usage: normal - sendTg normal "message to send"
 #        reply  - sendTg reply message_id "reply to send"
 #        edit   - sendTg edit message_id "new message" ( new message must be different )
@@ -130,7 +132,7 @@ else
         MESSAGE="<code>Started</code> <a href=\"${URL}\">dump</a> <code>on</code> <a href=\"$BUILD_URL\">jenkins</a>"
     fi
     MESSAGE+=$'\n'"<b>Job ID:</b> <code>$BUILD_ID</code>."
-    if _json="$(sendTG normal "${MESSAGE}")"; then
+    if _json="$(sendTG reply "${INITIAL_MESSAGE_ID}" "${MESSAGE}")"; then
         # Store both message IDs
         MESSAGE_ID="$(jq ".result.message_id" <<< "${_json}")"
         START_MESSAGE_ID="${MESSAGE_ID}"
