@@ -63,7 +63,7 @@ Branch already exists on <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branc
     esac
 
     ## Template
-    sendTG reply "${MESSAGE_ID}" "<b>Job</b> ${string}"
+    sendTG reply "${START_MESSAGE_ID}" "<b>Job</b> ${string}"
     exit "${1:?}"
 }
 
@@ -85,7 +85,10 @@ urlEncode() {
 }
 
 curl --compressed --fail-with-body --silent --location "https://$GITLAB_SERVER" > /dev/null || {
-    sendTG normal "Can't access $GITLAB_SERVER, cancelling job!"
+    if _json="$(sendTG normal "Can't access $GITLAB_SERVER, cancelling job!")"; then
+        CURL_MSG_ID="$(jq ".result.message_id" <<< "${_json}")"
+        sendTG reply "${CURL_MSG_ID}" "<b>Job failed!</b>"
+    fi
     exit 1
 }
 
@@ -113,8 +116,9 @@ if [[ -f $URL ]]; then
     cp -v "$URL" .  
     MESSAGE="<code>Found file locally.</code>"
     if _json="$(sendTG normal "${MESSAGE}")"; then
-        # grab initial message id
+        # Store both message IDs
         MESSAGE_ID="$(jq ".result.message_id" <<< "${_json}")"
+        START_MESSAGE_ID="${MESSAGE_ID}"
     else
         # disable sendTG and sendTG_edit_wrapper if wasn't able to send initial message
         sendTG() { :; } && sendTG_edit_wrapper() { :; }
@@ -127,8 +131,9 @@ else
     fi
     MESSAGE+=$'\n'"<b>Job ID:</b> <code>$BUILD_ID</code>."
     if _json="$(sendTG normal "${MESSAGE}")"; then
-        # grab initial message id
+        # Store both message IDs
         MESSAGE_ID="$(jq ".result.message_id" <<< "${_json}")"
+        START_MESSAGE_ID="${MESSAGE_ID}"
     else
         # disable sendTG and sendTG_edit_wrapper if wasn't able to send initial message
         sendTG() { :; } && sendTG_edit_wrapper() { :; }
