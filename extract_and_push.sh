@@ -761,10 +761,10 @@ is_ab=$(echo "$is_ab" | head -1)
 codename=$(echo "$codename" | tr ' ' '_')
 
 # Append 'oplus_pipeline_key' in case it's set
-if [ -v oplus_pipeline_key ]; then
+if [[ -n "${oplus_pipeline_key}" ]]; then
     branch=$(echo "${description}"--"${oplus_pipeline_key}" | head -1 | tr ' ' '-')
 # Append 'honor_product_base_version' in case it's set
-elif [ -v honor_product_base_version ]; then
+elif [[ -n "${honor_product_base_version}" ]]; then
     branch=$(echo "${description}"--"${honor_product_base_version}" | head -1 | tr ' ' '-')
 else
     branch=$(echo "$description" | head -1 | tr ' ' '-')
