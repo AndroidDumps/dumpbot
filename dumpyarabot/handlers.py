@@ -111,6 +111,14 @@ async def dump(
                 message_id=initial_message.message_id,
             )
 
+        initial_msg = await context.bot.send_message(
+            chat_id=chat.id,
+            reply_to_message_id=None if use_privdump else message.message_id,
+            text=f"{dump_args.url.unicode_string()} dump started",
+        )
+
+        dump_args.initial_message_id = initial_msg.message_id
+
         console.print("[blue]Calling Jenkins to start build...[/blue]")
         response_text = await utils.call_jenkins(dump_args)
         console.print(f"[green]Jenkins response: {response_text}[/green]")
@@ -118,6 +126,11 @@ async def dump(
     except ValidationError:
         console.print(f"[red]Invalid URL provided: {url}[/red]")
         response_text = "Invalid URL"
+        await context.bot.send_message(
+            chat_id=chat.id,
+            reply_to_message_id=None if use_privdump else message.message_id,
+            text=response_text,
+        )
     except Exception:
         console.print("[red]Unexpected error occurred:[/red]")
         console.print_exception()

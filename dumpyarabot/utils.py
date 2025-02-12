@@ -110,6 +110,7 @@ async def call_jenkins(args: schemas.DumpArguments) -> str:
                     "URL": args.url.unicode_string(),
                     "USE_ALT_DUMPER": args.use_alt_dumper,
                     "ADD_BLACKLIST": args.add_blacklist,
+                    "INITIAL_MESSAGE_ID": args.initial_message_id,
                 },
                 auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
             )

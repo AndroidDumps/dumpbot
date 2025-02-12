@@ -7,6 +7,8 @@
 
 CHAT_ID="-1001412293127"
 
+[[ -z ${INITIAL_MESSAGE_ID} ]] && START_MESSAGE_ID="" || START_MESSAGE_ID="${INITIAL_MESSAGE_ID}"
+
 # usage: normal - sendTg normal "message to send"
 #        reply  - sendTg reply message_id "reply to send"
 #        edit   - sendTg edit message_id "new message" ( new message must be different )
