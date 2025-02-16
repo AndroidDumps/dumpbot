@@ -55,7 +55,7 @@ async def dump(
     add_blacklist = "b" in options
     use_privdump = "p" in options
 
-    console.print(f"[green]Dump request:[/green]")
+    console.print("[green]Dump request:[/green]")
     console.print(f"  URL: {url}")
     console.print(f"  Alt dumper: {use_alt_dumper}")
     console.print(f"  Force: {force}")
@@ -196,7 +196,7 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     job_id = context.args[0]
     use_privdump = "p" in context.args[1:] if len(context.args) > 1 else False
 
-    console.print(f"[blue]Cancel request:[/blue]")
+    console.print("[blue]Cancel request:[/blue]")
     console.print(f"  Job ID: {job_id}")
     console.print(f"  Privdump: {use_privdump}")
     console.print(f"  Requested by: {user.username} (ID: {user.id})")
