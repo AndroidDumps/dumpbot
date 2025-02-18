@@ -115,10 +115,10 @@ async def call_jenkins(args: schemas.DumpArguments) -> str:
                 auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
             )
             response.raise_for_status()
-            console.print(f"[green]Successfully started {job_name} build[/green]")
-            return f"{job_name.capitalize()} job started"
+            console.print(f"[green]Successfully triggered {job_name} build[/green]")
+            return f"{job_name.capitalize()} job triggered"
         except Exception as e:
-            console.print(f"[red]Failed to start {job_name} build: {e}[/red]")
+            console.print(f"[red]Failed to trigger {job_name} build: {e}[/red]")
             raise
 
 
