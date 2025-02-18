@@ -38,18 +38,16 @@ def _is_matching_build(
     build: schemas.JenkinsBuild, args: schemas.DumpArguments
 ) -> bool:
     """Check if a build matches the given arguments."""
-    console.print("[blue]Checking build parameters match...[/blue]")
     for action in build.actions:
         if "parameters" in action:
             params = {param["name"]: param["value"] for param in action["parameters"]}
-            matches = (
+            if matches := (
                 params.get("URL") == args.url.unicode_string()
                 and params.get("USE_ALT_DUMPER") == args.use_alt_dumper
                 and params.get("ADD_BLACKLIST") == args.add_blacklist
-            )
-            if matches:
+            ):
                 console.print("[green]Found matching build parameters[/green]")
-            return matches
+                return matches
     return False
 
 
