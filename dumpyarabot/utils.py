@@ -20,6 +20,7 @@ async def get_jenkins_builds(job_name: str) -> List[schemas.JenkinsBuild]:
                     "tree": "allBuilds[number,result,actions[parameters[name,value]]]"
                 },
                 auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
+                timeout=30.0,
             )
             response.raise_for_status()
             builds = [
