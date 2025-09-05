@@ -370,6 +370,37 @@ if [[ -f "${PWD}/boot.img" ]]; then
         fi
     fi
 
+# Extract 'recovery.img'
+if [[ -f "${PWD}/recovery.img" ]]; then
+    # Set a variable for each path
+    ## Image
+    IMAGE=${PWD}/recovery.img
+
+    ## Output
+    OUTPUT=${PWD}/recovery
+
+    # Python rewrite automatically extracts such partitions
+    if [[ "${USE_ALT_DUMPER}" == "true" ]]; then
+        mkdir -p "${OUTPUT}/ramdisk"
+
+        # Unpack 'recovery.img' through 'unpackbootimg'
+        echo "[INFO] Extracting 'recovery.img' content..."
+        ${UNPACKBOOTIMG} -i "${IMAGE}" -o "${OUTPUT}" > /dev/null || \
+            echo "[ERROR] Extraction unsuccessful."
+
+        # Decrompress 'recovery.img-ramdisk'
+        ## Run only if 'recovery.img-ramdisk' is not empty
+        if file recovery.img-ramdisk | grep -q LZ4 || file recovery.img-ramdisk | grep -q gzip; then
+            echo "[INFO] Extracting ramdisk..."
+            unlz4 "${OUTPUT}/recovery.img-ramdisk" "${OUTPUT}/ramdisk.lz4" > /dev/null
+            7zz -snld x "${OUTPUT}/ramdisk.lz4" -o"${OUTPUT}/ramdisk" > /dev/null || \
+                echo "[ERROR] Failed to extract ramdisk."
+
+            ## Clean-up
+            rm -rf "${OUTPUT}/ramdisk.lz4"
+        fi
+    fi
+
     # Extract 'ikconfig'
     echo "[INFO] Extract 'ikconfig'..."
     if command -v extract-ikconfig > /dev/null ; then
