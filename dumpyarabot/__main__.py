@@ -2,7 +2,7 @@ import os
 import sys
 
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
-                          CommandHandler, MessageHandler, filters)
+                          CommandHandler, MessageHandler, filters, JobQueue)
 
 from dumpyarabot.handlers import blacklist, cancel_dump, dump, help_command, restart
 from dumpyarabot.mockup_handlers import (handle_enhanced_callback_query,
@@ -24,7 +24,7 @@ async def register_bot_commands(application):
     application.bot.delete_my_commands
 
 if __name__ == "__main__":
-    application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).build()
+    application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).job_queue(JobQueue()).build()
     application.bot_data["restart"] = False
 
     # Existing handlers
