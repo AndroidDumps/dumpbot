@@ -203,6 +203,57 @@ class RedisStorage:
             return True
         return False
 
+    @classmethod
+    def store_restart_message_info(cls, chat_id: int, message_id: int, user_mention: str) -> None:
+        """Store restart message info for post-restart update."""
+        try:
+            redis_client = cls.get_redis_client()
+            key = cls._make_key("restart_message_info")
+
+            restart_info = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "user_mention": user_mention
+            }
+
+            redis_client.set(key, json.dumps(restart_info), ex=300)  # Expire after 5 minutes
+
+        except Exception as e:
+            from rich.console import Console
+            console = Console()
+            console.print(f"[red]Error storing restart message info: {e}[/red]")
+
+    @classmethod
+    def get_restart_message_info(cls) -> Optional[Dict[str, Any]]:
+        """Get stored restart message info."""
+        try:
+            redis_client = cls.get_redis_client()
+            key = cls._make_key("restart_message_info")
+
+            data = redis_client.get(key)
+            if data:
+                return json.loads(data)
+            return None
+
+        except Exception as e:
+            from rich.console import Console
+            console = Console()
+            console.print(f"[red]Error retrieving restart message info: {e}[/red]")
+            return None
+
+    @classmethod
+    def clear_restart_message_info(cls) -> None:
+        """Clear stored restart message info."""
+        try:
+            redis_client = cls.get_redis_client()
+            key = cls._make_key("restart_message_info")
+            redis_client.delete(key)
+
+        except Exception as e:
+            from rich.console import Console
+            console = Console()
+            console.print(f"[red]Error clearing restart message info: {e}[/red]")
+
 
 # Backward compatibility adapter that wraps RedisStorage with bot_data interface
 class ReviewStorage:
