@@ -14,6 +14,41 @@ from dumpyarabot.moderated_handlers import (accept_command,
 from .config import settings
 
 
+async def handle_post_restart_update(context):
+    """Update the original restart message to confirm successful restart."""
+    from dumpyarabot.redis_storage import RedisStorage
+    from rich.console import Console
+    console = Console()
+
+    restart_info = RedisStorage.get_restart_message_info()
+
+    if restart_info:
+        console.print(f"[blue]Found restart message info: {restart_info}[/blue]")
+
+        try:
+            # Update the original restart message to confirm success
+            await context.bot.edit_message_text(
+                chat_id=restart_info["chat_id"],
+                message_id=restart_info["message_id"],
+                text=f" **Restart Complete**\n\n"
+                     f" **Requested by:** {restart_info['user_mention']}\n"
+                     f" **Status:** Bot successfully restarted and is now online!\n\n"
+                     f"⏱ All operations are ready to resume.",
+                parse_mode="Markdown"
+            )
+
+            console.print("[green]Successfully updated restart confirmation message[/green]")
+
+        except Exception as e:
+            console.print(f"[yellow]Could not update restart message: {e}[/yellow]")
+
+        finally:
+            # Clean up restart context
+            RedisStorage.clear_restart_message_info()
+    else:
+        console.print("[yellow]No restart message info found in Redis[/yellow]")
+
+
 async def register_bot_commands(application):
     """Register bot commands with Telegram for the menu interface."""
     from dumpyarabot.config import USER_COMMANDS
@@ -66,8 +101,10 @@ if __name__ == "__main__":
         application.job_queue.run_once(
             lambda context: register_bot_commands(application), 0
         )
+        # Handle post-restart message update
+        application.job_queue.run_once(handle_post_restart_update, 1)
 
     application.run_polling()
 
     if application.bot_data["restart"]:
-        os.execl(sys.executable, sys.executable, *sys.argv)
+        os.execl(sys.executable, sys.executable, "-m", "dumpyarabot")
