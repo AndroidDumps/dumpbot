@@ -439,6 +439,14 @@ async def handle_restart_callback(update: Update, context: ContextTypes.DEFAULT_
             parse_mode="Markdown"
         )
 
+        # Store restart context for post-restart message update in Redis
+        from dumpyarabot.redis_storage import RedisStorage
+        RedisStorage.store_restart_message_info(
+            chat_id=query.message.chat.id,
+            message_id=query.message.message_id,
+            user_mention=user.mention_markdown()
+        )
+
         # Trigger restart
         console.print("[yellow]Bot restart requested by admin - shutting down...[/yellow]")
         context.application.stop_running()
