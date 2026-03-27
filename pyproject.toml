@@ -4,7 +4,7 @@ authors = [
 ]
 requires-python = "<4.0,>=3.10"
 dependencies = [
-    "python-telegram-bot<21.0,>=20.7",
+    "python-telegram-bot<23.0,>=22.5",
     "pydantic<3.0.0,>=2.5.2",
     "httpx<1.0.0,>=0.25.2",
     "rich<14.0.0,>=13.7.0",
@@ -23,4 +23,3 @@ dev-dependencies = [
     "ruff<1.0.0,>=0.1.8",
     "autoflake<3.0.0,>=2.2.1",
 ]
-
