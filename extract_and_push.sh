@@ -8,6 +8,7 @@
 CHAT_ID="-1001412293127"
 
 [[ -z ${INITIAL_MESSAGE_ID} ]] && START_MESSAGE_ID="" || START_MESSAGE_ID="${INITIAL_MESSAGE_ID}"
+[[ -z ${INITIAL_CHAT_ID} ]] && REPLY_CHAT_ID="" || REPLY_CHAT_ID="${INITIAL_CHAT_ID}"
 
 # usage: normal - sendTg normal "message to send"
 #        reply  - sendTg reply message_id "reply to send"
@@ -20,10 +21,40 @@ sendTG() {
         curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&disable_web_page_preview=True"
     elif [[ ${mode} =~ reply ]]; then
         local message_id="${1:?Error: Missing message id for reply.}" && shift
-        curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_to_message_id=${message_id}&disable_web_page_preview=True"
+        if [[ -n "${REPLY_CHAT_ID}" ]]; then
+            # Use reply_parameters for cross-chat reply
+            curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_parameters=$(urlEncode "{\"message_id\":${message_id},\"chat_id\":${REPLY_CHAT_ID}}")&disable_web_page_preview=True"
+        else
+            # Use regular reply_to_message_id for same-chat reply
+            curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_to_message_id=${message_id}&disable_web_page_preview=True"
+        fi
     elif [[ ${mode} =~ edit ]]; then
         local message_id="${1:?Error: Missing message id for edit.}" && shift
         curl --compressed -s "${api_url}/editMessageText" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&message_id=${message_id}&disable_web_page_preview=True"
+    fi
+}
+
+# Enhanced sendTG function that includes cancel button for Jenkins jobs
+# usage: cancel_reply - sendTG_with_cancel cancel_reply message_id "reply to send"
+# Uses global vars API_KEY, BUILD_ID, JOB_NAME
+sendTG_with_cancel() {
+    local mode="${1:?Error: Missing mode}" && shift
+    local api_url="https://api.telegram.org/bot${API_KEY:?}"
+
+    # Create cancel button inline keyboard
+    local job_name="${JOB_NAME,,}"  # Convert to lowercase
+    [[ "${job_name}" == *"privdump"* ]] && job_name="privdump" || job_name="dumpyara"
+    local cancel_keyboard="{\"inline_keyboard\":[[{\"text\":\" Cancel ${job_name^} Job\",\"callback_data\":\"jenkins_cancel_${job_name}:${BUILD_ID}\"}]]}"
+
+    if [[ ${mode} =~ cancel_reply ]]; then
+        local message_id="${1:?Error: Missing message id for reply.}" && shift
+        if [[ -n "${REPLY_CHAT_ID}" ]]; then
+            # Use reply_parameters for cross-chat reply with cancel button
+            curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_parameters=$(urlEncode "{\"message_id\":${message_id},\"chat_id\":${REPLY_CHAT_ID}}")&reply_markup=$(urlEncode "${cancel_keyboard}")&disable_web_page_preview=True"
+        else
+            # Use regular reply_to_message_id for same-chat reply with cancel button
+            curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&reply_to_message_id=${message_id}&reply_markup=$(urlEncode "${cancel_keyboard}")&disable_web_page_preview=True"
+        fi
     fi
 }
 
@@ -43,6 +74,7 @@ sendTG_edit_wrapper() {
             ;;
     esac
 }
+
 
 
 # Inform the user about final status of build
@@ -132,13 +164,13 @@ else
         MESSAGE="<code>Started</code> <a href=\"${URL}\">dump</a> <code>on</code> <a href=\"$BUILD_URL\">jenkins</a>"
     fi
     MESSAGE+=$'\n'"<b>Job ID:</b> <code>$BUILD_ID</code>."
-    if _json="$(sendTG reply "${INITIAL_MESSAGE_ID}" "${MESSAGE}")"; then
+    if _json="$(sendTG_with_cancel cancel_reply "${INITIAL_MESSAGE_ID}" "${MESSAGE}")"; then
         # Store both message IDs
         MESSAGE_ID="$(jq ".result.message_id" <<< "${_json}")"
         START_MESSAGE_ID="${MESSAGE_ID}"
     else
         # disable sendTG and sendTG_edit_wrapper if wasn't able to send initial message
-        sendTG() { :; } && sendTG_edit_wrapper() { :; }
+        sendTG() { :; } && sendTG_edit_wrapper() { :; } && sendTG_with_cancel() { :; }
     fi
 
     # Override '${URL}' with best possible mirror of it
