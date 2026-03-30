@@ -1,3 +1,4 @@
+import secrets
 from typing import List, Tuple
 
 import httpx
@@ -7,6 +8,11 @@ from dumpyarabot import schemas
 from dumpyarabot.config import settings
 
 console = Console()
+
+
+def generate_request_id() -> str:
+    """Generate a unique request ID."""
+    return secrets.token_hex(4)  # 8-character hex string
 
 
 async def get_jenkins_builds(job_name: str) -> List[schemas.JenkinsBuild]:
@@ -45,9 +51,12 @@ def _is_matching_build(
             if matches := (
                 params.get("URL") == args.url.unicode_string()
                 and params.get("USE_ALT_DUMPER") == args.use_alt_dumper
-                and params.get("ADD_BLACKLIST") == args.add_blacklist
             ):
                 console.print("[green]Found matching build parameters[/green]")
+                console.print(f"[blue]Build params: {params}[/blue]")
+                console.print(
+                    f"[blue]Looking for: URL={args.url.unicode_string()}, ALT={args.use_alt_dumper}, PRIVDUMP={args.use_privdump}[/blue]"
+                )
                 return matches
     return False
 
@@ -95,27 +104,64 @@ async def check_existing_build(args: schemas.DumpArguments) -> Tuple[bool, str]:
     return False, f"No matching build found. A new {job_name} build will be started."
 
 
-async def call_jenkins(args: schemas.DumpArguments) -> str:
+async def call_jenkins(args: schemas.DumpArguments, add_blacklist: bool = False) -> str:
     """Call Jenkins to start a new build."""
     job_name = "privdump" if args.use_privdump else "dumpyara"
     console.print(f"[blue]Starting new {job_name} build[/blue]")
-    console.print("Build parameters:", args)
+
+    # Prepare Jenkins parameters
+    jenkins_params = {
+        "URL": args.url.unicode_string(),
+        "USE_ALT_DUMPER": args.use_alt_dumper,
+        "ADD_BLACKLIST": add_blacklist,
+        "INITIAL_MESSAGE_ID": args.initial_message_id,
+        "INITIAL_CHAT_ID": args.initial_chat_id,
+    }
+
+    jenkins_url = f"{settings.JENKINS_URL}/job/{job_name}/buildWithParameters"
+
+    # Debug: Show replicable Jenkins command
+    console.print(f"[yellow]=== JENKINS DEBUG COMMAND ===[/yellow]")
+    console.print(f"[cyan]Job: {job_name}[/cyan]")
+    console.print(f"[cyan]URL: {jenkins_url}[/cyan]")
+    console.print(f"[cyan]Parameters:[/cyan]")
+    for key, value in jenkins_params.items():
+        console.print(f"  {key} = {value} ({type(value).__name__})")
+
+    # Create curl command for replication (matches httpx params behavior - URL query parameters)
+    param_string = "&".join([f"{key}={value}" for key, value in jenkins_params.items()])
+    curl_command = f'curl -X POST "{jenkins_url}?{param_string}" \\\n'
+    curl_command += f'  -u "{settings.JENKINS_USER_NAME}:***"'
+
+    console.print(f"[green]Equivalent curl command:[/green]")
+    console.print(f"[dim]{curl_command}[/dim]")
+    console.print(f"[yellow]=== END JENKINS DEBUG ===[/yellow]")
 
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{settings.JENKINS_URL}/job/{job_name}/buildWithParameters",
-                params={
-                    "URL": args.url.unicode_string(),
-                    "USE_ALT_DUMPER": args.use_alt_dumper,
-                    "ADD_BLACKLIST": args.add_blacklist,
-                    "INITIAL_MESSAGE_ID": args.initial_message_id,
-                },
+                jenkins_url,
+                params=jenkins_params,
                 auth=(settings.JENKINS_USER_NAME, settings.JENKINS_USER_TOKEN),
             )
             response.raise_for_status()
             console.print(f"[green]Successfully triggered {job_name} build[/green]")
-            return f"{job_name.capitalize()} job triggered"
+            console.print(f"[blue]Response headers: {dict(response.headers)}[/blue]")
+
+            # Try to get queue item ID from Location header for tracking
+            queue_item_id = None
+            if "Location" in response.headers:
+                location = response.headers["Location"]
+                console.print(f"[blue]Build queue location: {location}[/blue]")
+                # Extract queue item ID from location URL
+                if "/queue/item/" in location:
+                    queue_item_id = location.split("/queue/item/")[1].rstrip("/")
+                    console.print(f"[blue]Queue item ID: {queue_item_id}[/blue]")
+
+            if queue_item_id:
+                return f"{job_name.capitalize()} job triggered (Queue ID: {queue_item_id})"
+            else:
+                return f"{job_name.capitalize()} job triggered"
         except Exception as e:
             console.print(f"[red]Failed to trigger {job_name} build: {e}[/red]")
             raise
