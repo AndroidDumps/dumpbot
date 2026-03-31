@@ -56,8 +56,33 @@ class ARQWorkerManager:
 
             console.print(f"[blue]Worker {self.worker_name} started and waiting for jobs...[/blue]")
 
-            # Run worker until shutdown
-            await self.worker.async_run()
+            worker_task = asyncio.create_task(self.worker.async_run())
+            shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+
+            done, pending = await asyncio.wait(
+                {worker_task, shutdown_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if worker_task in done:
+                exc = worker_task.exception()
+                if exc is not None:
+                    raise exc
+
+            if shutdown_task in done and worker_task not in done:
+                console.print(f"[yellow]Shutdown event received, stopping worker {self.worker_name}...[/yellow]")
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
+
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         except Exception as e:
             console.print(f"[red]Error starting worker {self.worker_name}: {e}[/red]")
