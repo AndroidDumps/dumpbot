@@ -1,9 +1,14 @@
 """Message formatting utilities for consistent Telegram messaging."""
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
 from dumpyarabot.utils import escape_markdown
+
+if TYPE_CHECKING:
+    from dumpyarabot.aria2_manager import DownloadProgress
 
 
 async def get_arq_start_time(arq_job_id: str) -> Optional[str]:
@@ -65,6 +70,31 @@ def generate_progress_bar(
     bar = _create_progress_bar(percentage, width, style)
 
     return f" *Progress:* [{bar}] {percentage:.0f}% (Step {current_step}/{total_steps})"
+
+
+def format_download_progress(progress: "DownloadProgress", bar_width: int = 10) -> str:
+    """
+    Format an aria2 download progress snapshot for Telegram display.
+
+    Returns a multi-line string like:
+        📥 *Downloading firmware...*
+        [██████▌   ] 65% (1.2 GB / 1.8 GB)
+        ⚡ 45.3 MB/s | ⏳ ETA: 14s | 🔗 16 connections
+    """
+    bar = _create_unicode_bar(progress.percentage, bar_width)
+    size_done = progress.format_size(progress.completed_bytes)
+    size_total = progress.format_size(progress.total_bytes) if progress.total_bytes > 0 else "?"
+
+    lines = [f"[{bar}] {progress.percentage:.0f}% ({size_done} / {size_total})"]
+
+    parts = []
+    parts.append(f" {progress.speed_mbps:.1f} MB/s")
+    parts.append(f" ETA: {progress.format_eta()}")
+    if progress.connections > 0:
+        parts.append(f" {progress.connections} conn")
+    lines.append(" | ".join(parts))
+
+    return "\n".join(lines)
 
 
 def _create_progress_bar(percentage: float, width: int, style: str) -> str:

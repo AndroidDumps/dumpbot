@@ -1,18 +1,22 @@
 import os
 import shutil
-import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
+from collections.abc import Callable, Coroutine
+from typing import Tuple
 from urllib.parse import urlparse
 
 import httpx
 from rich.console import Console
 
+from dumpyarabot.aria2_manager import Aria2Manager, DownloadProgress
 from dumpyarabot.schemas import DumpJob
 from dumpyarabot.process_utils import run_download_command
 from dumpyarabot.file_utils import get_latest_file_in_directory, safe_remove_file, get_file_size_formatted
 
 console = Console()
+
+# Type alias for the optional progress callback
+ProgressCallback = Callable[[DownloadProgress], Coroutine[None, None, None]]
 
 
 class FirmwareDownloader:
@@ -22,8 +26,18 @@ class FirmwareDownloader:
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
-    async def download_firmware(self, job: DumpJob) -> Tuple[str, str]:
-        """Download firmware and return (file_path, file_name)."""
+    async def download_firmware(
+        self,
+        job: DumpJob,
+        on_progress: ProgressCallback | None = None,
+    ) -> Tuple[str, str]:
+        """Download firmware and return (file_path, file_name).
+
+        Args:
+            job: The dump job containing URL and options.
+            on_progress: Optional async callback invoked with each DownloadProgress
+                         snapshot during aria2 RPC downloads.
+        """
         url = str(job.dump_args.url)
 
         # Check if it's a local file
@@ -40,7 +54,7 @@ class FirmwareDownloader:
         console.print(f"[blue]Downloading from: {optimized_url}[/blue]")
 
         # Download based on URL type
-        file_path = await self._download_by_type(optimized_url)
+        file_path = await self._download_by_type(optimized_url, on_progress=on_progress)
         file_name = Path(file_path).name
 
         console.print(f"[green]Downloaded: {file_name} ({get_file_size_formatted(file_path)})[/green]")
@@ -107,7 +121,9 @@ class FirmwareDownloader:
         console.print("[yellow]All mirrors failed, using original URL[/yellow]")
         return url
 
-    async def _download_by_type(self, url: str) -> str:
+    async def _download_by_type(
+        self, url: str, on_progress: ProgressCallback | None = None
+    ) -> str:
         """Download file based on URL type."""
         if "drive.google.com" in url:
             return await self._download_google_drive(url)
@@ -116,7 +132,7 @@ class FirmwareDownloader:
         elif "mega.nz" in url:
             return await self._download_mega(url)
         else:
-            return await self._download_default(url)
+            return await self._download_default(url, on_progress=on_progress)
 
     async def _download_google_drive(self, url: str) -> str:
         """Download from Google Drive using gdown."""
@@ -176,40 +192,55 @@ class FirmwareDownloader:
 
         return str(latest_file)
 
-    async def _download_default(self, url: str) -> str:
-        """Download using aria2c with wget fallback."""
-        # Try aria2c first
-        result = await run_download_command(
-            "aria2c", "-q", "-s16", "-x16", "--check-certificate=false", url,
-            cwd=self.work_dir,
-            timeout=1800.0,  # 30 minutes for large files
-            description="Downloading with aria2c"
-        )
+    async def _download_default(
+        self, url: str, on_progress: ProgressCallback | None = None
+    ) -> str:
+        """Download using aria2 RPC (with live progress) and wget fallback."""
+        # --- Try aria2 RPC first ---
+        aria2_failed = False
+        try:
+            async with Aria2Manager(str(self.work_dir)) as aria2:
+                async for progress in aria2.download(url, poll_interval=3.0, timeout=1800.0):
+                    if on_progress:
+                        try:
+                            await on_progress(progress)
+                        except Exception as cb_err:
+                            # Don't let a Telegram/callback error kill the download
+                            console.print(f"[yellow]Progress callback error (ignored): {cb_err}[/yellow]")
 
-        if result.success:
-            # Success with aria2c
-            latest_file = get_latest_file_in_directory(self.work_dir)
-            if latest_file:
-                return str(latest_file)
+                # Download finished successfully
+                downloaded = aria2.get_downloaded_file_path()
+                if downloaded:
+                    return downloaded
 
-        console.print("[yellow]aria2c failed, trying wget...[/yellow]")
+                # aria2 reported completion but no file found
+                console.print("[yellow]aria2 completed but no file found in work dir[/yellow]")
+                aria2_failed = True
+        except Exception as e:
+            console.print(f"[yellow]aria2 RPC download failed: {e}[/yellow]")
+            aria2_failed = True
 
-        # Clean up aria2c partial download artifacts only
-        for file in self.work_dir.glob("*.aria2"):
-            safe_remove_file(file)
+        if not aria2_failed:
+            raise Exception("aria2 download did not produce a file")
 
-        # Try wget fallback
+        # Clean up aria2c partial/sidecar artifacts before wget fallback
+        for file in self.work_dir.iterdir():
+            if file.suffix == ".aria2" or (file.is_file() and file.stat().st_size == 0):
+                safe_remove_file(file)
+
+        console.print("[yellow]Falling back to wget...[/yellow]")
+
+        # --- wget fallback ---
         result = await run_download_command(
             "wget", "-q", "--no-check-certificate", url,
             cwd=self.work_dir,
-            timeout=1800.0,  # 30 minutes for large files
+            timeout=1800.0,
             description="Downloading with wget fallback"
         )
 
         if not result.success:
-            raise Exception(f"Both aria2c and wget failed. Last error: {result.stderr}")
+            raise Exception(f"Both aria2 RPC and wget failed. Last error: {result.stderr}")
 
-        # Find downloaded file
         latest_file = get_latest_file_in_directory(self.work_dir)
         if not latest_file:
             raise Exception("No file found after wget download")

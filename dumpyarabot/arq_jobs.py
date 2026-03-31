@@ -21,7 +21,8 @@ from dumpyarabot.gitlab_manager import GitLabManager
 from dumpyarabot.schemas import DumpJob
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.property_extractor import PropertyExtractor
-from dumpyarabot.message_formatting import format_comprehensive_progress_message
+from dumpyarabot.aria2_manager import DownloadProgress
+from dumpyarabot.message_formatting import format_comprehensive_progress_message, format_download_progress
 
 console = Console()
 
@@ -304,77 +305,97 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Step 3: URL optimization and mirror selection (12%)
                 await update_progress_with_metadata(job_data, " Optimizing download URL and selecting mirrors...", 12.0)
 
-                # Step 4: Starting download (16%)
-                await update_progress_with_metadata(job_data, " Downloading firmware...", 16.0)
+                # Step 4: Starting download (15%)
+                await update_progress_with_metadata(job_data, " Downloading firmware...", 15.0)
 
                 # Create DumpJob object for components that need it
                 dump_job = DumpJob.model_validate(job_data)
 
-                # Use periodic timer for download operation
+                # Download with live progress via aria2 RPC callback.
+                # Download progress is mapped into the 15%–50% band of overall job progress.
+                async def _on_download_progress(dp: DownloadProgress) -> None:
+                    dl_pct = dp.percentage  # 0-100 within download
+                    overall_pct = 15.0 + (dl_pct / 100.0) * 35.0  # map to 15%-50%
+                    dl_info = format_download_progress(dp)
+                    step_msg = f" Downloading firmware...\n{dl_info}"
+
+                    progress_data = {
+                        "current_step": step_msg,
+                        "percentage": overall_pct,
+                        "current_step_number": 4,
+                        "total_steps": 25,
+                    }
+                    await _send_status_update(job_data, step_msg, progress_data, job_data.get("metadata"))
+
+                # Use PeriodicTimerUpdate as a fallback for downloaders without
+                # live progress (Google Drive, MediaFire, MEGA, wget fallback).
+                # When aria2 RPC is active, the callback above sends updates instead.
                 download_progress = {
                     "current_step": "Download",
                     "total_steps": 25,
                     "current_step_number": 4,
-                    "percentage": 16.0,
+                    "percentage": 15.0,
                 }
                 async with PeriodicTimerUpdate(job_data, " Downloading firmware...", download_progress):
-                    firmware_path, firmware_name = await downloader.download_firmware(dump_job)
+                    firmware_path, firmware_name = await downloader.download_firmware(
+                        dump_job, on_progress=_on_download_progress
+                    )
 
-                # Step 5: Download completed (20%)
-                await update_progress_with_metadata(job_data, " Firmware download completed", 20.0)
+                # Step 5: Download completed (50%)
+                await update_progress_with_metadata(job_data, " Firmware download completed", 50.0)
 
-                # Step 6: Starting firmware extraction (24%)
-                await update_progress_with_metadata(job_data, " Extracting firmware partitions...", 24.0)
+                # Step 6: Starting firmware extraction (52%)
+                await update_progress_with_metadata(job_data, " Extracting firmware partitions...", 52.0)
 
                 # Use periodic timer for extraction operation
-                async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 24.0}):
+                async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 52.0}):
                     await extractor.extract_firmware(dump_job, firmware_path)
 
-                # Step 7: Firmware extraction completed (28%)
-                await update_progress_with_metadata(job_data, " Firmware extraction completed", 28.0)
+                # Step 7: Firmware extraction completed (56%)
+                await update_progress_with_metadata(job_data, " Firmware extraction completed", 56.0)
 
-                # Step 8: Process boot images (32%)
-                await update_progress_with_metadata(job_data, " Processing boot images...", 32.0)
+                # Step 8: Process boot images (58%)
+                await update_progress_with_metadata(job_data, " Processing boot images...", 58.0)
                 await extractor.process_boot_images()
 
-                # Step 9: Generate board-info.txt (36%)
-                await update_progress_with_metadata(job_data, " Generating board-info.txt...", 36.0)
+                # Step 9: Generate board-info.txt (60%)
+                await update_progress_with_metadata(job_data, " Generating board-info.txt...", 60.0)
                 await prop_extractor.generate_board_info()
 
-                # Step 10: Generate all_files.txt (40%)
-                await update_progress_with_metadata(job_data, " Generating all_files.txt...", 40.0)
+                # Step 10: Generate all_files.txt (62%)
+                await update_progress_with_metadata(job_data, " Generating all_files.txt...", 62.0)
                 await prop_extractor.generate_all_files_list()
 
-                # Step 11: Generate device tree (44%)
-                await update_progress_with_metadata(job_data, " Generating device tree...", 44.0)
+                # Step 11: Generate device tree (64%)
+                await update_progress_with_metadata(job_data, " Generating device tree...", 64.0)
                 await prop_extractor.generate_device_tree()
 
-                # Step 12: Extracting device properties (48%)
-                await update_progress_with_metadata(job_data, " Extracting device properties...", 48.0)
+                # Step 12: Extracting device properties (66%)
+                await update_progress_with_metadata(job_data, " Extracting device properties...", 66.0)
                 device_props = await prop_extractor.extract_properties()
                 job_data["metadata"]["device_info"] = device_props
-                await update_progress_with_metadata(job_data, " Device analysis completed", 56.0)
+                await update_progress_with_metadata(job_data, " Device analysis completed", 68.0)
 
-                # Step 13: Checking/creating GitLab subgroup (60%)
-                await update_progress_with_metadata(job_data, " Checking GitLab subgroup...", 60.0)
+                # Step 13: Checking/creating GitLab subgroup (70%)
+                await update_progress_with_metadata(job_data, " Checking GitLab subgroup...", 70.0)
 
-                # Step 14: Checking/creating GitLab project (64%)
-                await update_progress_with_metadata(job_data, " Checking GitLab project...", 64.0)
+                # Step 14: Checking/creating GitLab project (72%)
+                await update_progress_with_metadata(job_data, " Checking GitLab project...", 72.0)
 
-                # Step 15: Setting up git repository (68%)
-                await update_progress_with_metadata(job_data, " Creating GitLab repository...", 68.0)
+                # Step 15: Setting up git repository (74%)
+                await update_progress_with_metadata(job_data, " Creating GitLab repository...", 74.0)
 
                 # Get DUMPER_TOKEN from environment or settings
                 dumper_token = getattr(settings, 'DUMPER_TOKEN', None)
                 if not dumper_token:
                     raise Exception("DUMPER_TOKEN not configured")
 
-                # Use periodic timer for GitLab operation (longest operation)
+                # Use periodic timer for GitLab operation (longest post-download operation)
                 gitlab_progress = {
                     "current_step": "GitLab",
                     "total_steps": 25,
                     "current_step_number": 15,
-                    "percentage": 68.0,
+                    "percentage": 74.0,
                 }
                 async with PeriodicTimerUpdate(job_data, " Creating GitLab repository...", gitlab_progress):
                     repo_url, repo_path = await gitlab_manager.create_and_push_repository(
@@ -383,11 +404,11 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                         force=job_data["dump_args"].get("force", False),
                     )
 
-                # Step 16: Preparing channel notification (76%)
-                await update_progress_with_metadata(job_data, " Preparing channel notification...", 76.0)
+                # Step 16: Preparing channel notification (88%)
+                await update_progress_with_metadata(job_data, " Preparing channel notification...", 88.0)
 
-                # Step 17: Sending notification (84%)
-                await update_progress_with_metadata(job_data, " Sending channel notification...", 84.0)
+                # Step 17: Sending notification (92%)
+                await update_progress_with_metadata(job_data, " Sending channel notification...", 92.0)
 
                 # Get API_KEY from environment or settings for channel notification
                 api_key = getattr(settings, 'API_KEY', None)
