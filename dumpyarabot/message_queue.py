@@ -679,6 +679,7 @@ class MessageQueue:
             "dump_args": DumpArguments(
                 url=url,
                 use_alt_dumper=dump_args_data.get("use_alt_dumper", False),
+                force=dump_args_data.get("force", False),
                 use_privdump=dump_args_data.get("use_privdump", False),
                 initial_message_id=dump_args_data.get("initial_message_id") or telegram_context.get("message_id"),
                 initial_chat_id=dump_args_data.get("initial_chat_id") or telegram_context.get("chat_id"),
