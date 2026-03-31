@@ -97,7 +97,7 @@ class FirmwareDownloader:
             original_host
         ]
 
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             for mirror in mirrors:
                 test_url = f"{mirror}/{file_path}"
                 try:
