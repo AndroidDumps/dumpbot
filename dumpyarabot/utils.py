@@ -57,6 +57,9 @@ async def retry_http_request(
 def escape_markdown(text: str) -> str:
     """Escape special characters for Telegram legacy Markdown format.
 
+    Only escapes characters that are special in legacy Markdown:
+    *, _, `, [
+
     Args:
         text: The text to escape
 
@@ -66,22 +69,12 @@ def escape_markdown(text: str) -> str:
     if not text:
         return text
 
-    # Escape backslash first, then other special characters for legacy Markdown
+    # Legacy Markdown only uses these 4 special characters
     return (text.replace("\\", "\\\\")  # Backslash first
             .replace("*", "\\*")
             .replace("_", "\\_")
             .replace("`", "\\`")
-            .replace("{", "\\{")
-            .replace("}", "\\}")
-            .replace("[", "\\[")
-            .replace("]", "\\]")
-            .replace("(", "\\(")
-            .replace(")", "\\)")
-            .replace("#", "\\#")
-            .replace("+", "\\+")
-            .replace("-", "\\-")
-            .replace(".", "\\.")
-            .replace("!", "\\!"))
+            .replace("[", "\\["))
 
 
 def generate_request_id() -> str:
