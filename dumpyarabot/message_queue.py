@@ -556,40 +556,6 @@ class MessageQueue:
         )
         await self.publish(message)
 
-    async def get_job_status(self, job_id: str) -> Optional[DumpJob]:
-        """Enhanced ARQ status retrieval with rich metadata."""
-        from dumpyarabot.arq_config import arq_pool
-
-        arq_status = await arq_pool.get_job_status(job_id)
-        if not arq_status:
-            return None
-
-        # Extract metadata from ARQ result if available
-        result = arq_status.get("result", {})
-        metadata = result.get("metadata", {})
-
-        # Build enhanced DumpJob with metadata
-        job_data = {
-            "job_id": job_id,
-            "status": self._arq_status_to_job_status(arq_status["status"]),
-            "dump_args": {"url": metadata.get("telegram_context", {}).get("url", "")},
-            "add_blacklist": False,
-            "created_at": arq_status.get("enqueue_time"),
-            "started_at": metadata.get("start_time"),
-            "completed_at": metadata.get("end_time"),
-            "worker_id": "arq_worker",
-            "error_details": metadata.get("error_context", {}).get("message") if metadata.get("error_context") else None,
-            "result_data": result,
-            "progress": self._extract_current_progress(metadata),
-            # Add rich metadata fields
-            "device_info": metadata.get("device_info"),
-            "repository": metadata.get("repository"),
-            "telegram_context": metadata.get("telegram_context", {}),
-            "progress_history": metadata.get("progress_history", [])
-        }
-
-        return DumpJob.model_validate(job_data)
-
     def _arq_status_to_job_status(self, arq_status: str) -> JobStatus:
         """Convert ARQ status to JobStatus enum."""
         status_mapping = {

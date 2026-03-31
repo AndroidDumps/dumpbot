@@ -84,10 +84,12 @@ async def _send_status_update(
     # PRESERVE: Cross-chat logic for moderated system (exact original logic)
     dump_args_initial_message_id = job_data["dump_args"].get("initial_message_id")
 
-    if dump_args_initial_message_id and initial_chat_id != settings.ALLOWED_CHATS[0]:
+    primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else None
+
+    if dump_args_initial_message_id and primary_allowed_chat is not None and initial_chat_id != primary_allowed_chat:
         # Cross-chat update for moderated system - edit with cross-chat reply
         await message_queue.send_cross_chat_edit(
-            chat_id=settings.ALLOWED_CHATS[0],
+            chat_id=primary_allowed_chat,
             text=formatted_message,
             edit_message_id=initial_message_id,
             reply_to_message_id=dump_args_initial_message_id,
@@ -149,10 +151,12 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
         # PRESERVE: Cross-chat logic for moderated system (exact original logic)
         dump_args_initial_message_id = job_data.get("dump_args", {}).get("initial_message_id")
 
-        if dump_args_initial_message_id and initial_chat_id != settings.ALLOWED_CHATS[0]:
+        primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else None
+
+        if dump_args_initial_message_id and primary_allowed_chat is not None and initial_chat_id != primary_allowed_chat:
             # Cross-chat failure update for moderated system - edit with cross-chat reply
             await message_queue.send_cross_chat_edit(
-                chat_id=settings.ALLOWED_CHATS[0],
+                chat_id=primary_allowed_chat,
                 text=formatted_message,
                 edit_message_id=initial_message_id,
                 reply_to_message_id=dump_args_initial_message_id,
@@ -266,6 +270,12 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 dump_job = DumpJob.model_validate(job_data)
 
                 # Use periodic timer for download operation
+                download_progress = {
+                    "current_step": "Download",
+                    "total_steps": 25,
+                    "current_step_number": 4,
+                    "percentage": 16.0,
+                }
                 async with PeriodicTimerUpdate(job_data, " Downloading firmware...", download_progress):
                     firmware_path, firmware_name = await downloader.download_firmware(dump_job)
 
@@ -306,6 +316,12 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     raise Exception("DUMPER_TOKEN not configured")
 
                 # Use periodic timer for GitLab operation (longest operation)
+                gitlab_progress = {
+                    "current_step": "GitLab",
+                    "total_steps": 25,
+                    "current_step_number": 15,
+                    "percentage": 60.0,
+                }
                 async with PeriodicTimerUpdate(job_data, " Creating GitLab repository...", gitlab_progress):
                     repo_url, repo_path = await gitlab_manager.create_and_push_repository(device_props, dumper_token)
 
