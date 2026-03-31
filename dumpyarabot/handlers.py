@@ -82,6 +82,7 @@ async def dump(
         dump_args = schemas.DumpArguments(
             url=normalized_url,
             use_alt_dumper=use_alt_dumper,
+            force=force,
             use_privdump=use_privdump,
             initial_message_id=None if use_privdump else message.message_id,
             initial_chat_id=chat.id

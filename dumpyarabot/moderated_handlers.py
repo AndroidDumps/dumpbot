@@ -13,6 +13,7 @@ from dumpyarabot.config import (CALLBACK_ACCEPT, CALLBACK_CANCEL_REQUEST,
                                 CALLBACK_REJECT, CALLBACK_SUBMIT_ACCEPTANCE,
                                 CALLBACK_TOGGLE_ALT, CALLBACK_TOGGLE_FORCE,
                                 CALLBACK_TOGGLE_PRIVDUMP, settings)
+from dumpyarabot.message_formatting import generate_progress_bar
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.storage import ReviewStorage
 from dumpyarabot.ui import (ACCEPTANCE_TEMPLATE, REJECTION_TEMPLATE, REVIEW_TEMPLATE, SUBMISSION_TEMPLATE,
@@ -292,17 +293,26 @@ async def _handle_submit_callback(
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
             use_alt_dumper=options_state.alt,
+            force=options_state.force,
             use_privdump=options_state.privdump,
             initial_message_id=pending_review.original_message_id,
             initial_chat_id=pending_review.original_chat_id,
         )
 
+        job_id = secrets.token_hex(8)
+        status_message_id = await _create_status_message(
+            context,
+            pending_review,
+            dump_args,
+            job_id,
+        )
+
         # Create dump job with metadata
         job = schemas.DumpJob(
-            job_id=secrets.token_hex(8),
+            job_id=job_id,
             dump_args=dump_args,
             created_at=datetime.now(timezone.utc),
-            initial_message_id=pending_review.original_message_id,
+            initial_message_id=status_message_id,
             initial_chat_id=pending_review.original_chat_id
         )
 
@@ -431,17 +441,26 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
             use_alt_dumper=use_alt,
+            force=force,
             use_privdump=use_privdump,
             initial_message_id=pending_review.original_message_id,
             initial_chat_id=pending_review.original_chat_id,
         )
 
+        job_id = secrets.token_hex(8)
+        status_message_id = await _create_status_message(
+            context,
+            pending_review,
+            dump_args,
+            job_id,
+        )
+
         # Create dump job with metadata
         job = schemas.DumpJob(
-            job_id=secrets.token_hex(8),
+            job_id=job_id,
             dump_args=dump_args,
             created_at=datetime.now(timezone.utc),
-            initial_message_id=pending_review.original_message_id,
+            initial_message_id=status_message_id,
             initial_chat_id=pending_review.original_chat_id
         )
 

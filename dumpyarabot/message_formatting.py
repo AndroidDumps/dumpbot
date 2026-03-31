@@ -210,6 +210,8 @@ def format_dump_options(dump_args: Dict[str, Any], add_blacklist: bool = False) 
 
     if dump_args.get("use_alt_dumper"):
         options.append("Alt Dumper")
+    if dump_args.get("force"):
+        options.append("Force")
     if add_blacklist:
         options.append("Blacklist")
     if dump_args.get("use_privdump"):
@@ -265,13 +267,16 @@ async def format_comprehensive_progress_message(
         status_text = "Firmware Dump in Progress"
 
     # Format basic info
-    url_display = format_url_display(job_data["dump_args"]["url"])
     job_id_display = job_data["job_id"]
     worker_id_display = job_data.get("worker_id", "arq_worker")
 
     # Build message
     message = f"{status_emoji} *{status_text}*\n\n"
-    message += f" *URL:* `{url_display}`\n"
+    if job_data["dump_args"].get("use_privdump"):
+        message += " *URL:* `[hidden for private dump]`\n"
+    else:
+        url_display = format_url_display(job_data["dump_args"]["url"])
+        message += f" *URL:* `{url_display}`\n"
     message += f"🆔 *Job ID:* `{job_id_display}`\n"
 
     # Format options
