@@ -9,6 +9,7 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 class DumpArguments(BaseModel):
     url: AnyHttpUrl
     use_alt_dumper: bool
+    force: bool = False
     use_privdump: bool
     initial_message_id: Optional[int] = None
     initial_chat_id: Optional[int] = None
