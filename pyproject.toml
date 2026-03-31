@@ -4,11 +4,15 @@ authors = [
 ]
 requires-python = "<4.0,>=3.10"
 dependencies = [
-    "python-telegram-bot<23.0,>=22.5",
+    "python-telegram-bot[job-queue]<23.0,>=22.5",
     "pydantic<3.0.0,>=2.5.2",
     "httpx<1.0.0,>=0.25.2",
     "rich<14.0.0,>=13.7.0",
     "pydantic-settings<3.0.0,>=2.1.0",
+    "redis<6.0.0,>=5.0.0",
+    "arq>=0.26.0,<1.0.0",
+    "pillow>=10.0.0,<11.0.0",
+    "pyppmd>=1.2.0",
 ]
 name = "dumpyarabot"
 version = "0.1.0"
@@ -22,4 +26,10 @@ dev-dependencies = [
     "isort<6.0.0,>=5.13.2",
     "ruff<1.0.0,>=0.1.8",
     "autoflake<3.0.0,>=2.2.1",
+    "pytest>=7.0.0,<8.0.0",
+    "pytest-asyncio>=0.21.0,<1.0.0",
+    "pytest-mock>=3.10.0,<4.0.0",
+    "pytest-cov>=4.0.0,<5.0.0",
+    "faker>=20.0.0,<21.0.0",
+    "responses>=0.24.0,<1.0.0",
 ]

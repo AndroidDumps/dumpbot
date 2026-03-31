@@ -1,12 +1,16 @@
+import secrets
 from typing import Optional
 
-from pydantic import ValidationError
 from rich.console import Console
 from telegram import Chat, Message, Update
 from telegram.ext import ContextTypes
 
-from dumpyarabot import schemas, utils
+from dumpyarabot import schemas, utils, url_utils
+from dumpyarabot.utils import escape_markdown
 from dumpyarabot.config import settings
+from dumpyarabot.auth import check_admin_permissions
+from dumpyarabot.message_queue import message_queue
+from dumpyarabot.message_formatting import generate_progress_bar
 
 console = Console()
 
@@ -25,25 +29,18 @@ async def dump(
 
     # Ensure it can only be used in the correct group
     if chat.id not in settings.ALLOWED_CHATS:
-        console.print(
-            f"[yellow]Unauthorized chat attempt from chat_id: {chat.id}[/yellow]"
-        )
-        await context.bot.send_message(
-            chat_id=chat.id,
-            reply_to_message_id=message.message_id,
-            text="You can't use this here",
-        )
+        # Do nothing
         return
 
     # Ensure that we had some arguments passed
     if not context.args:
         console.print("[yellow]No arguments provided for dump command[/yellow]")
-        usage = "Usage: `/dump [URL] [a|f|b|p]`\nURL: required, a: alt dumper, f: force, b: blacklist, p: use privdump"
-        await context.bot.send_message(
+        usage = "Usage: `/dump \\[URL\\] \\[a\\|f\\|p\\]`\nURL: required, a: alt dumper, f: force, p: use privdump"
+        await message_queue.send_reply(
             chat_id=chat.id,
-            reply_to_message_id=message.message_id,
             text=usage,
-            parse_mode="Markdown",
+            reply_to_message_id=message.message_id,
+            context={"command": "dump", "error": "missing_args"}
         )
         return
 
@@ -52,14 +49,12 @@ async def dump(
 
     use_alt_dumper = "a" in options
     force = "f" in options
-    add_blacklist = "b" in options
     use_privdump = "p" in options
 
     console.print("[green]Dump request:[/green]")
     console.print(f"  URL: {url}")
     console.print(f"  Alt dumper: {use_alt_dumper}")
     console.print(f"  Force: {force}")
-    console.print(f"  Blacklist: {add_blacklist}")
     console.print(f"  Privdump: {use_privdump}")
 
     # Delete the user's message immediately if privdump is used
@@ -77,62 +72,107 @@ async def dump(
         except Exception as e:
             console.print(f"[red]Failed to delete message for privdump: {e}[/red]")
 
-    # Try to check for existing build and call jenkins if necessary
+    # Try to validate args and queue dump job
     try:
+        # Validate URL using new utility
+        is_valid, normalized_url, error_msg = await url_utils.validate_and_normalize_url(url)
+        if not is_valid:
+            raise ValueError(error_msg)
+
         dump_args = schemas.DumpArguments(
-            url=url,
+            url=normalized_url,
             use_alt_dumper=use_alt_dumper,
-            add_blacklist=add_blacklist,
+            force=force,
             use_privdump=use_privdump,
+            initial_message_id=None if use_privdump else message.message_id,
+            initial_chat_id=chat.id
         )
 
-        if not force:
-            console.print("[blue]Checking for existing builds...[/blue]")
-            initial_message = await context.bot.send_message(
-                chat_id=chat.id,
-                reply_to_message_id=None if use_privdump else message.message_id,
-                text="Checking for existing builds...",
-            )
 
-            exists, status_message = await utils.check_existing_build(dump_args)
-            if exists:
-                console.print(
-                    f"[yellow]Found existing build: {status_message}[/yellow]"
-                )
-                await context.bot.edit_message_text(
-                    chat_id=chat.id,
-                    message_id=initial_message.message_id,
-                    text=status_message,
-                )
-                return
+        # Create dump job
+        job = schemas.DumpJob(
+            job_id=secrets.token_hex(8),
+            dump_args=dump_args,
+        )
 
-            await context.bot.delete_message(
-                chat_id=chat.id,
-                message_id=initial_message.message_id,
-            )
+        console.print(f"[blue]Queueing dump job {job.job_id}...[/blue]")
 
-        if not use_privdump:
-            dump_args.initial_message_id = message.message_id
+        # Send initial progress message directly (bypassing queue) to get real message ID
+        if use_privdump:
+            initial_text = " *Private Dump Job Queued*\n\n"
+        else:
+            initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
 
-        console.print("[blue]Calling Jenkins to start build...[/blue]")
-        response_text = await utils.call_jenkins(dump_args)
-        console.print(f"[green]Jenkins response: {response_text}[/green]")
+        initial_text += f"🆔 *Job ID:* `{job.job_id}`\n"
 
-    except ValidationError:
-        console.print(f"[red]Invalid URL provided: {url}[/red]")
-        response_text = "Invalid URL"
+        # Format options
+        options_list = []
+        if use_alt_dumper:
+            options_list.append("Alt Dumper")
+        if force:
+            options_list.append("Force")
+        if use_privdump:
+            options_list.append("Private")
+        if options_list:
+            initial_text += f" *Options:* {', '.join(options_list)}\n"
 
-    except Exception:
-        console.print("[red]Unexpected error occurred:[/red]")
+        initial_text += f"\n{generate_progress_bar(None)}\n"
+        initial_text += " Queued for processing...\n\n"
+        initial_text += "⏱ *Elapsed:* 0s\n"
+        initial_text += " *Worker:* Waiting for assignment...\n"
+
+        # Send initial message directly to get real Telegram message ID
+        initial_message = await message_queue.send_immediate_message(
+            chat_id=chat.id,
+            text=initial_text,
+            reply_to_message_id=None if use_privdump else message.message_id
+        )
+
+        # Store the REAL Telegram message ID in the job
+        job.initial_message_id = initial_message.message_id
+        job.initial_chat_id = chat.id
+
+        # Create enhanced job data with metadata structure
+        enhanced_job_data = job.model_dump()
+        enhanced_job_data["metadata"] = {
+            "telegram_context": {
+                "chat_id": chat.id,
+                "message_id": initial_message.message_id,
+                "user_id": message.from_user.id if message.from_user else 0,
+                "url": normalized_url
+            }
+        }
+
+        # Queue the job with enhanced data
+        job_id = await message_queue.queue_dump_job_with_metadata(enhanced_job_data)
+
+        console.print(f"[green]Dump job {job_id} queued with enhanced metadata[/green]")
+
+    except ValueError as e:
+        console.print(f"[red]Invalid URL provided: {url} - {e}[/red]")
+        response_text = f" *Invalid URL:* {url}\n\nPlease provide a valid firmware download URL."
+
+        # Send error message as reply
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text=response_text,
+            reply_to_message_id=None if use_privdump else message.message_id,
+            context={"command": "dump", "url": url, "error": "validation_error"}
+        )
+
+    except Exception as e:
+        console.print(f"[red]Unexpected error occurred: {e}[/red]")
         console.print_exception()
-        response_text = "An error occurred"
+        escaped_error = escape_markdown(str(e))
+        response_text = f" *Error occurred:* {escaped_error}\n\nPlease try again or contact an administrator."
 
-    # Reply to the user with whatever the status is
-    await context.bot.send_message(
-        chat_id=chat.id,
-        reply_to_message_id=None if use_privdump else message.message_id,
-        text=response_text,
-    )
+        # Send error message as reply
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text=response_text,
+            reply_to_message_id=None if use_privdump else message.message_id,
+            context={"command": "dump", "url": url, "error": "unexpected_error"}
+        )
 
 
 async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -147,26 +187,19 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     # Ensure it can only be used in the correct group
     if chat.id not in settings.ALLOWED_CHATS:
-        console.print(
-            f"[yellow]Unauthorized chat attempt for cancel from chat_id: {chat.id}[/yellow]"
-        )
-        await context.bot.send_message(
-            chat_id=chat.id,
-            reply_to_message_id=message.message_id,
-            text="You can't use this here",
-        )
+        # Do nothing
         return
 
     # Check if the user is an admin
-    admins = await chat.get_administrators()
-    if user not in [admin.user for admin in admins]:
+    has_permission, error_message = await check_admin_permissions(update, context, require_admin=True)
+    if not has_permission:
         console.print(
-            f"[yellow]Non-admin user {user.id} tried to use cancel command[/yellow]"
+            f"[yellow]Non-admin user {user.id} tried to use cancel command: {error_message}[/yellow]"
         )
-        await context.bot.send_message(
+        await message_queue.send_error(
             chat_id=chat.id,
-            reply_to_message_id=message.message_id,
             text="You don't have permission to use this command",
+            context={"command": "cancel", "user_id": user.id, "error": "permission_denied"}
         )
         return
 
@@ -174,13 +207,13 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not context.args:
         console.print("[yellow]No job_id provided for cancel command[/yellow]")
         usage = (
-            "Usage: `/cancel [job_id] [p]`\njob_id: required, p: cancel privdump job"
+            "Usage: `/cancel \\[job\\_id\\] \\[p\\]`\njob\\_id: required, p: cancel privdump job"
         )
-        await context.bot.send_message(
+        await message_queue.send_reply(
             chat_id=chat.id,
-            reply_to_message_id=message.message_id,
             text=usage,
-            parse_mode="Markdown",
+            reply_to_message_id=message.message_id,
+            context={"command": "cancel", "error": "missing_args"}
         )
         return
 
@@ -193,23 +226,78 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     console.print(f"  Requested by: {user.username} (ID: {user.id})")
 
     try:
-        response_message = await utils.cancel_jenkins_job(job_id, use_privdump)
-        console.print(
-            f"[green]Successfully processed cancel request: {response_message}[/green]"
-        )
-    except Exception as e:
-        console.print("[red]Error processing cancel request:[/red]")
-        console.print_exception()
-        response_message = f"Error cancelling job: {str(e)}"
+        # Try to cancel the job in the worker queue
+        cancelled = await message_queue.cancel_job(job_id)
 
-    await context.bot.send_message(
+        if cancelled:
+            escaped_job_id = escape_markdown(job_id)
+            response_message = f" *Job cancelled successfully*\n\n🆔 *Job ID:* `{escaped_job_id}`\n\nThe dump job has been removed from the queue or stopped if it was in progress."
+            console.print(f"[green]Successfully cancelled job {job_id}[/green]")
+        else:
+            escaped_job_id = escape_markdown(job_id)
+            response_message = f" *Job not found*\n\n🆔 *Job ID:* `{escaped_job_id}`\n\nThe job was not found in the queue or may have already completed." 
+    except Exception as e:
+        console.print(f"[red]Error processing cancel request: {e}[/red]")
+        console.print_exception()
+        escaped_job_id = escape_markdown(job_id)
+        escaped_error = escape_markdown(str(e))
+        response_message = f" *Error cancelling job*\n\n🆔 *Job ID:* `{escaped_job_id}`\n\nError: {escaped_error}"
+
+    await message_queue.send_reply(
         chat_id=chat.id,
-        reply_to_message_id=message.message_id,
         text=response_message,
+        reply_to_message_id=message.message_id,
+        context={"command": "cancel", "job_id": job_id}
     )
 
 
-async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enhanced status command with ARQ metadata."""
+    chat: Optional[Chat] = update.effective_chat
+    message: Optional[Message] = update.effective_message
+    user = update.effective_user
+
+    if not chat or not message or not user:
+        console.print("[red]Chat, message or user object is None[/red]")
+        return
+
+    # Ensure it can only be used in the correct group
+    if chat.id not in settings.ALLOWED_CHATS:
+        return
+
+    try:
+        if context.args and context.args[0]:
+            # Specific job details
+            job_id = context.args[0]
+            job = await message_queue.get_job_status(job_id)
+
+            if job:
+                from dumpyarabot.message_formatting import format_enhanced_job_status
+                status_text = await format_enhanced_job_status(job)
+            else:
+                status_text = f" *Job not found:* `{escape_markdown(job_id)}`"
+        else:
+            # Active and recent jobs overview
+            active_jobs = await message_queue.get_active_jobs_with_metadata()
+            recent_jobs = await message_queue.get_recent_jobs_with_metadata(limit=8)
+
+            from dumpyarabot.message_formatting import format_jobs_overview
+            status_text = await format_jobs_overview(active_jobs, recent_jobs)
+
+    except Exception as e:
+        console.print(f"[red]Error getting status: {e}[/red]")
+        status_text = f" *Error:* {escape_markdown(str(e))}"
+
+    await message_queue.send_reply(
+        chat_id=chat.id,
+        text=status_text,
+        reply_to_message_id=message.message_id,
+        context={"command": "status"}
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler for the /help command."""
     chat: Optional[Chat] = update.effective_chat
     message: Optional[Message] = update.effective_message
     user = update.effective_user
@@ -219,22 +307,201 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Ensure it can only be used in the correct group
     if chat.id not in settings.ALLOWED_CHATS:
-        await context.bot.send_message(
+        # Do nothing
+        return
+
+    # Check if user is admin to show admin commands
+    has_permission, _ = await check_admin_permissions(update, context, require_admin=True)
+    is_admin = has_permission
+
+    help_text = " *DumpyaraBot Command Help*\n\n"
+
+    # User commands
+    help_text += "* User Commands:*\n"
+    from dumpyarabot.config import USER_COMMANDS
+    for cmd, desc in USER_COMMANDS:
+        escaped_desc = escape_markdown(desc)
+        help_text += f"/{cmd} \\- {escaped_desc}\n"
+
+    # Internal commands
+    help_text += "\n* Internal Commands:*\n"
+    from dumpyarabot.config import INTERNAL_COMMANDS
+    for cmd, desc in INTERNAL_COMMANDS:
+        escaped_desc = escape_markdown(desc)
+        help_text += f"/{cmd} \\- {escaped_desc}\n"
+
+    # Admin commands (only show to admins)
+    if is_admin:
+        help_text += "\n* Admin Commands:*\n"
+        from dumpyarabot.config import ADMIN_COMMANDS
+        for cmd, desc in ADMIN_COMMANDS:
+            escaped_desc = escape_markdown(desc)
+            help_text += f"/{cmd} \\- {escaped_desc}\n"
+
+    help_text += "\n*Usage Examples:*\n"
+    help_text += "• `/dump https://example.com/firmware.zip` \\- Basic dump\n"
+    help_text += "• `/dump https://example.com/firmware.zip af` \\- Alt dumper \\+ force\n"
+    help_text += "• `/dump https://example.com/firmware.zip p` \\- Private dump\n"
+    help_text += "\n*Option Flags:*\n"
+    help_text += "• `a` \\- Use alternative dumper for rare firmware types unsupported by primary dumper\n"
+    help_text += "• `f` \\- Force re\\-dump (skip existing dump/branch check)\n"
+    help_text += "• `p` \\- Use private dump (Deletes message, processes in background, Firmware URL = Not visibile, Finished dump in Gitlab = Visible.)\n"
+
+    await message_queue.send_reply(
+        chat_id=chat.id,
+        text=help_text,
+        reply_to_message_id=message.message_id,
+        context={"command": "help", "is_admin": is_admin}
+    )
+
+
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler for the /restart command with confirmation dialog."""
+    chat: Optional[Chat] = update.effective_chat
+    message: Optional[Message] = update.effective_message
+    user = update.effective_user
+
+    if not chat or not message or not user:
+        return
+
+    # Ensure it can only be used in the correct group
+    if chat.id not in settings.ALLOWED_CHATS:
+        # Do nothing
+        return
+
+    # Check if the user is a Telegram admin in this chat
+    has_permission, error_message = await check_admin_permissions(update, context, require_admin=True)
+    if not has_permission:
+        console.print(f"[red]Error checking admin status: {error_message}[/red]")
+        await message_queue.send_error(
             chat_id=chat.id,
-            reply_to_message_id=message.message_id,
-            text="You can't use this here",
+            text=" You don't have permission to restart the bot. Only chat administrators can use this command.",
+            context={"command": "restart", "user_id": user.id, "error": "permission_denied"}
         )
         return
 
-    # Check if the user is an admin
-    admins = await chat.get_administrators()
-    if user not in [admin.user for admin in admins]:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            reply_to_message_id=message.message_id,
-            text="You don't have permission to use this command",
-        )
+    # Create confirmation keyboard
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from dumpyarabot.config import CALLBACK_RESTART_CONFIRM, CALLBACK_RESTART_CANCEL
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                " Yes, Restart Bot",
+                callback_data=f"{CALLBACK_RESTART_CONFIRM}{user.id}"
+            ),
+            InlineKeyboardButton(
+                " Cancel",
+                callback_data=f"{CALLBACK_RESTART_CANCEL}{user.id}"
+            ),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    confirmation_text = (
+        " *Bot Restart Confirmation*\n\n"
+        f" *Requested by:* {user.mention_markdown()}\n"
+        f" *Action:* Restart dumpyarabot\n\n"
+        " This will:\n"
+        "• Stop all current operations\n"
+        "• Reload configuration and code\n"
+        "• Clear in-memory state\n"
+        "• Restart with latest changes\n\n"
+        "⏱ *This confirmation will expire in 30 seconds*"
+    )
+
+    # Convert keyboard to dict for queue serialization
+    keyboard_dict = {
+        "inline_keyboard": [[
+            {"text": " Yes, Restart Bot", "callback_data": f"{CALLBACK_RESTART_CONFIRM}{user.id}"},
+            {"text": " Cancel", "callback_data": f"{CALLBACK_RESTART_CANCEL}{user.id}"}
+        ]]
+    }
+
+    # Create a custom queued message for restart confirmation
+    from dumpyarabot.message_queue import QueuedMessage, MessageType, MessagePriority
+    restart_message = QueuedMessage(
+        type=MessageType.NOTIFICATION,
+        priority=MessagePriority.URGENT,
+        chat_id=chat.id,
+        text=confirmation_text,
+        parse_mode=settings.DEFAULT_PARSE_MODE,
+        reply_to_message_id=message.message_id,
+        keyboard=keyboard_dict,
+        context={"command": "restart", "user_id": user.id, "confirmation": True}
+    )
+    await message_queue.publish(restart_message)
+
+
+async def handle_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle restart confirmation/cancellation callbacks."""
+    query = update.callback_query
+    user = update.effective_user
+
+    if not query or not user:
         return
 
-    context.application.stop_running()
-    context.bot_data["restart"] = True
+    await query.answer()
+
+    from dumpyarabot.config import CALLBACK_RESTART_CONFIRM, CALLBACK_RESTART_CANCEL
+
+    if query.data.startswith(CALLBACK_RESTART_CONFIRM):
+        # Extract user ID from callback data
+        requesting_user_id = int(query.data.replace(CALLBACK_RESTART_CONFIRM, ""))
+
+        # Verify the user clicking is the same one who requested
+        if user.id != requesting_user_id:
+            await query.edit_message_text(
+                " Only the user who requested the restart can confirm it."
+            )
+            return
+
+        # Verify user is still a chat admin
+        has_permission, error_message = await check_admin_permissions(update, context, require_admin=True)
+        if not has_permission:
+            console.print(f"[red]Error checking admin status: {error_message}[/red]")
+            await query.edit_message_text(
+                " Permission denied. You are no longer a chat administrator."
+            )
+            return
+
+        # Confirm restart
+        await query.edit_message_text(
+            f" *Restart Confirmed*\n\n"
+            f" *Confirmed by:* {user.mention_markdown()}\n"
+            f" *Status:* Bot is restarting now...\n\n"
+            f" The bot should be back online in a few seconds.",
+            parse_mode=settings.DEFAULT_PARSE_MODE
+        )
+
+        # Store restart context for post-restart message update in Redis
+        from dumpyarabot.redis_storage import RedisStorage
+        await RedisStorage.store_restart_message_info(
+            chat_id=query.message.chat.id,
+            message_id=query.message.message_id,
+            user_mention=user.mention_markdown()
+        )
+
+        # Trigger restart
+        console.print("[yellow]Bot restart requested by admin - shutting down...[/yellow]")
+        context.application.stop_running()
+        context.bot_data["restart"] = True
+
+    elif query.data.startswith(CALLBACK_RESTART_CANCEL):
+        # Extract user ID from callback data
+        requesting_user_id = int(query.data.replace(CALLBACK_RESTART_CANCEL, ""))
+
+        # Verify the user clicking is the same one who requested
+        if user.id != requesting_user_id:
+            await query.edit_message_text(
+                " Only the user who requested the restart can cancel it."
+            )
+            return
+
+        # Cancel restart
+        await query.edit_message_text(
+            f" *Restart Cancelled*\n\n"
+            f" *Cancelled by:* {user.mention_markdown()}\n"
+            f" *Status:* Bot restart was cancelled. Bot continues running normally.",
+            parse_mode=settings.DEFAULT_PARSE_MODE
+        )

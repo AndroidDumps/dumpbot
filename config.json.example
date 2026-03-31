@@ -32,5 +32,7 @@
   ],
   "allowed_chats": [
     -1001412293127
-  ]
+  ],
+  "REQUEST_CHAT_ID": -1001234567890,
+  "REVIEW_CHAT_ID": -1001234567891
 }

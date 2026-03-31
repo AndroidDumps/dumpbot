@@ -1,0 +1,184 @@
+from typing import Any, Dict, Optional
+
+from telegram.ext import ContextTypes
+
+from dumpyarabot.schemas import AcceptOptionsState, MockupState, PendingReview
+
+# Check if Redis is available and configured
+try:
+    from dumpyarabot.config import settings
+    if hasattr(settings, 'REDIS_URL') and settings.REDIS_URL:
+        from dumpyarabot.redis_storage import ReviewStorage as RedisReviewStorage
+        USE_REDIS = True
+    else:
+        USE_REDIS = False
+except (ImportError, AttributeError):
+    USE_REDIS = False
+
+
+class ReviewStorage:
+    """Data access layer for managing pending reviews with automatic Redis/bot_data selection."""
+
+    @staticmethod
+    async def get_pending_reviews(context: ContextTypes.DEFAULT_TYPE) -> Dict[str, Any]:
+        """Get all pending reviews."""
+        if USE_REDIS:
+            return await RedisReviewStorage.get_pending_reviews(context)
+        else:
+            if "pending_reviews" not in context.bot_data:
+                context.bot_data["pending_reviews"] = {}
+            return context.bot_data["pending_reviews"]
+
+    @staticmethod
+    async def get_pending_review(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str
+    ) -> Optional[PendingReview]:
+        """Get a specific pending review by request_id."""
+        if USE_REDIS:
+            try:
+                return await RedisReviewStorage.get_pending_review(context, request_id)
+            except ValueError:
+                return None
+        else:
+            reviews = await ReviewStorage.get_pending_reviews(context)
+            review_data = reviews.get(request_id)
+            if review_data:
+                if isinstance(review_data, dict):
+                    return PendingReview(**review_data)
+                else:
+                    return review_data
+            return None
+
+    @staticmethod
+    async def store_pending_review(
+        context: ContextTypes.DEFAULT_TYPE, review: PendingReview
+    ) -> None:
+        """Store a pending review."""
+        if USE_REDIS:
+            await RedisReviewStorage.store_pending_review(context, review)
+        else:
+            reviews = await ReviewStorage.get_pending_reviews(context)
+            reviews[review.request_id] = review.model_dump()
+
+    @staticmethod
+    async def remove_pending_review(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str
+    ) -> bool:
+        """Remove a pending review. Returns True if removed, False if not found."""
+        if USE_REDIS:
+            try:
+                return await RedisReviewStorage.remove_pending_review(context, request_id)
+            except ValueError:
+                return False
+        else:
+            reviews = await ReviewStorage.get_pending_reviews(context)
+            if request_id in reviews:
+                del reviews[request_id]
+                return True
+            return False
+
+    @staticmethod
+    async def get_options_state(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str
+    ) -> AcceptOptionsState:
+        """Get options state for a request_id, creating default if not exists."""
+        if USE_REDIS:
+            try:
+                return await RedisReviewStorage.get_options_state(context, request_id)
+            except ValueError:
+                return AcceptOptionsState()
+        else:
+            if "options_states" not in context.bot_data:
+                context.bot_data["options_states"] = {}
+
+            states = context.bot_data["options_states"]
+            if request_id not in states:
+                states[request_id] = AcceptOptionsState().model_dump()
+
+            return AcceptOptionsState(**states[request_id])
+
+    @staticmethod
+    async def update_options_state(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str, options: AcceptOptionsState
+    ) -> None:
+        """Update options state for a request_id."""
+        if USE_REDIS:
+            try:
+                await RedisReviewStorage.update_options_state(context, request_id, options)
+            except ValueError:
+                return
+        else:
+            if "options_states" not in context.bot_data:
+                context.bot_data["options_states"] = {}
+
+            context.bot_data["options_states"][request_id] = options.model_dump()
+
+    @staticmethod
+    async def remove_options_state(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str
+    ) -> None:
+        """Remove options state for a request_id."""
+        if USE_REDIS:
+            try:
+                await RedisReviewStorage.remove_options_state(context, request_id)
+            except ValueError:
+                return
+        else:
+            if (
+                "options_states" in context.bot_data
+                and request_id in context.bot_data["options_states"]
+            ):
+                del context.bot_data["options_states"][request_id]
+
+    @staticmethod
+    async def get_mockup_state(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str
+    ) -> MockupState:
+        """Get mockup state for a request_id, creating default if not exists."""
+        if USE_REDIS:
+            try:
+                return await RedisReviewStorage.get_mockup_state(context, request_id)
+            except ValueError:
+                return MockupState(request_id=request_id)
+        else:
+            if "mockup_states" not in context.bot_data:
+                context.bot_data["mockup_states"] = {}
+
+            states = context.bot_data["mockup_states"]
+            if request_id not in states:
+                states[request_id] = MockupState(request_id=request_id).model_dump()
+
+            return MockupState(**states[request_id])
+
+    @staticmethod
+    async def update_mockup_state(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str, state: MockupState
+    ) -> None:
+        """Update mockup state for a request_id."""
+        if USE_REDIS:
+            try:
+                await RedisReviewStorage.update_mockup_state(context, request_id, state)
+            except ValueError:
+                return
+        else:
+            if "mockup_states" not in context.bot_data:
+                context.bot_data["mockup_states"] = {}
+
+            context.bot_data["mockup_states"][request_id] = state.model_dump()
+
+    @staticmethod
+    async def remove_mockup_state(
+        context: ContextTypes.DEFAULT_TYPE, request_id: str
+    ) -> None:
+        """Remove mockup state for a request_id."""
+        if USE_REDIS:
+            try:
+                await RedisReviewStorage.remove_mockup_state(context, request_id)
+            except ValueError:
+                return
+        else:
+            if (
+                "mockup_states" in context.bot_data
+                and request_id in context.bot_data["mockup_states"]
+            ):
+                del context.bot_data["mockup_states"][request_id]
