@@ -1,8 +1,6 @@
 import secrets
-from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import ValidationError
 from rich.console import Console
 from telegram import Chat, Message, Update
 from telegram.ext import ContextTypes
@@ -79,7 +77,7 @@ async def dump(
         # Validate URL using new utility
         is_valid, normalized_url, error_msg = await url_utils.validate_and_normalize_url(url)
         if not is_valid:
-            raise ValidationError(error_msg)
+            raise ValueError(error_msg)
 
         dump_args = schemas.DumpArguments(
             url=normalized_url,
@@ -94,7 +92,6 @@ async def dump(
         job = schemas.DumpJob(
             job_id=secrets.token_hex(8),
             dump_args=dump_args,
-            add_blacklist="b" in options
         )
 
         console.print(f"[blue]Queueing dump job {job.job_id}...[/blue]")
@@ -115,9 +112,6 @@ async def dump(
             options_list.append("Force")
         if use_privdump:
             options_list.append("Private")
-        if "b" in options:
-            options_list.append("Blacklist")
-
         if options_list:
             initial_text += f" *Options:* {', '.join(options_list)}\n"
 
@@ -301,95 +295,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def blacklist(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Handler for the /blacklist command."""
-    chat: Optional[Chat] = update.effective_chat
-    message: Optional[Message] = update.effective_message
-
-    if not chat or not message:
-        console.print("[red]Chat or message object is None[/red]")
-        return
-
-    # Ensure it can only be used in the correct group
-    if chat.id not in settings.ALLOWED_CHATS:
-        # Do nothing
-        return
-
-    # Ensure that we had some arguments passed
-    if not context.args:
-        console.print("[yellow]No arguments provided for blacklist command[/yellow]")
-        usage = "Usage: `/blacklist \\[URL\\]`\nURL: required"
-        await message_queue.send_reply(
-            chat_id=chat.id,
-            text=usage,
-            reply_to_message_id=message.message_id,
-            context={"command": "blacklist", "error": "missing_args"}
-        )
-        return
-
-    url = context.args[0]
-
-    console.print("[green]Blacklist request:[/green]")
-    console.print(f"  URL: {url}")
-
-    # Try to validate URL and queue blacklist job
-    try:
-        dump_args = schemas.DumpArguments(
-            url=url,
-            use_alt_dumper=False,
-            add_blacklist=True,
-            use_privdump=False,
-            initial_message_id=message.message_id,
-            initial_chat_id=chat.id
-        )
-
-        job = schemas.DumpJob(
-            job_id=secrets.token_hex(8),
-            dump_args=dump_args,
-            add_blacklist=True,
-            created_at=datetime.now(timezone.utc),
-            initial_message_id=message.message_id,
-            initial_chat_id=chat.id
-        )
-
-        # Create enhanced job data with metadata structure
-        enhanced_job_data = job.model_dump()
-        enhanced_job_data["metadata"] = {
-            "job_type": "blacklist",
-            "telegram_context": {
-                "chat_id": chat.id,
-                "message_id": message.message_id,
-                "user_id": message.from_user.id if message.from_user else 0,
-                "url": url
-            }
-        }
-
-        console.print("[blue]Queueing blacklist job with metadata...[/blue]")
-        job_id = await message_queue.queue_dump_job_with_metadata(enhanced_job_data)
-        console.print(f"[green]Successfully queued blacklist job {job_id} with metadata[/green]")
-        response_text = f"Blacklist job queued successfully. Job ID: {job_id}"
-
-    except ValidationError:
-        console.print(f"[red]Invalid URL provided: {url}[/red]")
-        response_text = "Invalid URL"
-
-    except Exception:
-        console.print("[red]Unexpected error occurred:[/red]")
-        console.print_exception()
-        response_text = "An error occurred"
-
-    # Reply to the user with whatever the status is
-    await message_queue.send_reply(
-        chat_id=chat.id,
-        text=response_text,
-        reply_to_message_id=message.message_id,
-        context={"command": "blacklist", "url": url, "final_response": True}
-    )
-
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler for the /help command."""
     chat: Optional[Chat] = update.effective_chat
@@ -436,8 +341,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text += "• `/dump https://example.com/firmware.zip` \\- Basic dump\n"
     help_text += "• `/dump https://example.com/firmware.zip af` \\- Alt dumper \\+ force\n"
     help_text += "• `/dump https://example.com/firmware.zip p` \\- Private dump\n"
-    help_text += "• `/blacklist https://example.com/firmware.zip` \\- Add URL to blacklist\n"
-
     help_text += "\n*Option Flags:*\n"
     help_text += "• `a` \\- Use alternative dumper for rare firmware types unsupported by primary dumper\n"
     help_text += "• `f` \\- Force re\\-dump (skip existing dump/branch check)\n"

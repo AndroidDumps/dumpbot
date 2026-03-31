@@ -81,7 +81,7 @@ async def handle_request_message(
         # 3. Validate URL using new utility
         is_valid, validated_url, error_msg = await url_utils.validate_and_normalize_url(url_str)
         if not is_valid:
-            raise ValidationError(error_msg)
+            raise ValueError(error_msg)
 
         # 4. Generate request_id
         request_id = utils.generate_request_id()
@@ -147,7 +147,7 @@ async def handle_request_message(
 
         console.print(f"[green]Request {request_id} processed successfully[/green]")
 
-    except ValidationError:
+    except ValueError:
         console.print(f"[red]Invalid URL provided: {url_str}[/red]")
         await message_queue.send_error(
             chat_id=chat.id,
@@ -331,7 +331,7 @@ async def _handle_submit_callback(
         console.print(f"[blue]Chat ID: {pending_review.original_chat_id}, Message ID: {pending_review.original_message_id}[/blue]")
 
         await message_queue.send_cross_chat(
-            chat_id=settings.REVIEW_CHAT_ID,
+            chat_id=pending_review.original_chat_id,
             text=user_message,
             reply_to_message_id=pending_review.original_message_id,
             reply_to_chat_id=pending_review.original_chat_id,
@@ -342,6 +342,7 @@ async def _handle_submit_callback(
 
         # Delete the admin confirmation message after successful job start
         await query.delete_message()
+        await _cleanup_request(context, request_id)
 
     except Exception as e:
         console.print(f"[red]Error processing acceptance: {e}[/red]")
@@ -349,9 +350,6 @@ async def _handle_submit_callback(
         await query.edit_message_text(
             f" Error processing request {request_id}: {str(e)}"
         )
-
-    # Clean up request data and submission message
-    await _cleanup_request(context, request_id)
 
 
 async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -488,6 +486,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
         console.print("[green]Acceptance message via command sent successfully[/green]")
+        await _cleanup_request(context, request_id)
 
     except Exception as e:
         console.print(f"[red]Error processing acceptance: {e}[/red]")
@@ -497,9 +496,6 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             text=f" Error processing request {request_id}: {str(e)}",
             context={"command": "accept", "error": "processing_exception", "request_id": request_id, "exception": str(e)}
         )
-
-    # Clean up request data and submission message
-    await _cleanup_request(context, request_id)
 
 
 async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -614,6 +610,7 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_to_chat_id=pending_review.original_chat_id,
             context={"command": "reject", "action": "user_notification", "request_id": request_id}
         )
+        await _cleanup_request(context, request_id)
 
     except Exception as e:
         console.print(f"[red]Error processing rejection: {e}[/red]")
@@ -624,9 +621,6 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             text=f" Error processing rejection for request {request_id}: {str(e)}",
             context={"command": "reject", "error": "processing_exception", "request_id": request_id, "exception": str(e)}
         )
-
-    # Clean up request data and submission message
-    await _cleanup_request(context, request_id)
 
 
 async def _handle_cancel_callback(

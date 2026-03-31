@@ -7,12 +7,10 @@ while preserving all Telegram messaging features and cross-chat functionality.
 import asyncio
 import tempfile
 import traceback
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-import arq
 from rich.console import Console
 
 from dumpyarabot.config import settings
@@ -21,7 +19,6 @@ from dumpyarabot.firmware_extractor import FirmwareExtractor
 from dumpyarabot.gitlab_manager import GitLabManager
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.property_extractor import PropertyExtractor
-from dumpyarabot.schemas import DumpJob, JobStatus
 from dumpyarabot.message_formatting import format_comprehensive_progress_message
 
 console = Console()
