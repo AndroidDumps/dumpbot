@@ -165,11 +165,11 @@ services:
 
 #### Redis CLI Monitoring
 ```bash
-# Check active workers
-redis-cli KEYS "dumpyarabot:worker:*"
+# Check ARQ worker health keys
+redis-cli KEYS "dumpyarabot:arq_jobs:health-check*"
 
-# Check job queue length
-redis-cli LLEN "dumpyarabot:job_queue"
+# Check ARQ job queue length
+redis-cli ZCARD "dumpyarabot:arq_jobs"
 
 # Monitor in real-time
 redis-cli MONITOR
@@ -232,7 +232,6 @@ ENABLE_DEVICE_TREE_GEN=true
 # a - Use alternative dumper
 # f - Force (skip existing build check)
 # p - Private dump (delete original message)
-# b - Add to blacklist
 ```
 
 #### Cancel a Job
@@ -325,16 +324,16 @@ redis-cli ping
 tail -f worker.log
 
 # Verify queue has jobs
-redis-cli LLEN "dumpyarabot:job_queue"
+redis-cli ZCARD "dumpyarabot:arq_jobs"
 ```
 
 #### Jobs stuck in processing
 ```bash
-# Check worker heartbeats
-redis-cli KEYS "dumpyarabot:worker:*"
+# Check ARQ in-progress jobs
+redis-cli KEYS "arq:in-progress:*"
 
-# Manual job cleanup (if worker crashed)
-redis-cli DEL "dumpyarabot:worker:worker_01"
+# Remove a stale queued job manually
+redis-cli ZREM "dumpyarabot:arq_jobs" "<job_id>"
 ```
 
 #### GitLab integration failures
