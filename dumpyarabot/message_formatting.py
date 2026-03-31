@@ -79,25 +79,26 @@ def _create_progress_bar(percentage: float, width: int, style: str) -> str:
 
 def _create_unicode_bar(percentage: float, width: int) -> str:
     """Create a Unicode progress bar with smooth sub-block precision."""
-    # Unicode block characters for smooth progress
-    blocks = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
+    # Unicode block characters for smooth progress (index 0 = empty)
+    blocks = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
 
     # Calculate progress
     progress_chars = (percentage / 100) * width
     full_blocks = int(progress_chars)
     remainder = progress_chars - full_blocks
 
-    # Build the bar
+    # Build the bar tracking character count separately
     bar = "█" * full_blocks
+    chars_used = full_blocks
 
     # Add partial block if there's remainder and space
-    if full_blocks < width and remainder > 0:
-        partial_index = min(8, int(remainder * 8) + 1)
+    if chars_used < width and remainder > 0:
+        partial_index = min(8, int(remainder * 8))
         bar += blocks[partial_index]
-        full_blocks += 1
+        chars_used += 1
 
     # Fill remaining space
-    bar += " " * (width - len(bar))
+    bar += " " * (width - chars_used)
 
     return bar
 
@@ -624,6 +625,11 @@ def format_time_ago(timestamp) -> str:
 
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
+
+    # Handle naive datetimes by assuming UTC
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
     diff = now - timestamp
 
     seconds = int(diff.total_seconds())
