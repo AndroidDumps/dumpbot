@@ -82,6 +82,8 @@ async def run_command(
     stdout_redirect = asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL
     stderr_redirect = asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL
 
+    process = None
+
     try:
         # Create and run process
         process = await asyncio.create_subprocess_exec(
@@ -147,6 +149,18 @@ async def run_command(
             raise ProcessException(error_msg, result)
 
         return result
+
+    except asyncio.CancelledError:
+        if process and process.returncode is None:
+            process.kill()
+            try:
+                await process.wait()
+            except Exception:
+                pass
+
+        if not quiet:
+            console.print(f"[yellow]{log_desc} cancelled[/yellow]")
+        raise
 
     except Exception as e:
         if not quiet:
