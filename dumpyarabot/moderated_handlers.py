@@ -42,8 +42,8 @@ def _truncate_message(text: str, max_length: int = 300) -> str:
 
 async def _cleanup_request(context: ContextTypes.DEFAULT_TYPE, request_id: str) -> None:
     """Clean up a processed request - remove from storage but keep submission message for status updates."""
-    ReviewStorage.remove_pending_review(context, request_id)
-    ReviewStorage.remove_options_state(context, request_id)
+    await ReviewStorage.remove_pending_review(context, request_id)
+    await ReviewStorage.remove_options_state(context, request_id)
 
 
 async def handle_request_message(
@@ -99,35 +99,31 @@ async def handle_request_message(
             original_message=original_message,
         )
 
-        # Convert keyboard to dict for queue serialization
-        keyboard_dict = create_review_keyboard(request_id).to_dict()
-
-        # Create review message via queue with proper message_id handling
-        from dumpyarabot.message_queue import QueuedMessage, MessageType, MessagePriority
-        review_msg = QueuedMessage(
-            type=MessageType.NOTIFICATION,
-            priority=MessagePriority.HIGH,
+        # Send review message directly to get real Telegram message ID
+        from telegram import InlineKeyboardMarkup
+        review_keyboard = create_review_keyboard(request_id)
+        review_message = await message_queue.send_immediate_message(
             chat_id=settings.REVIEW_CHAT_ID,
             text=review_text,
             parse_mode=settings.DEFAULT_PARSE_MODE,
-            keyboard=keyboard_dict,
+            reply_to_message_id=None,
             disable_web_page_preview=True,
-            context={"moderated_request": True, "request_id": request_id, "stage": "review"}
         )
-        review_message = await message_queue.publish_and_return_placeholder(review_msg)
+        # Attach the keyboard by editing (send_immediate_message doesn't support keyboards)
+        await context.bot.edit_message_reply_markup(
+            chat_id=settings.REVIEW_CHAT_ID,
+            message_id=review_message.message_id,
+            reply_markup=review_keyboard,
+        )
 
-        # 6. Notify user of successful submission via message queue
-        submission_msg = QueuedMessage(
-            type=MessageType.NOTIFICATION,
-            priority=MessagePriority.HIGH,
+        # 6. Notify user of successful submission directly to get real Telegram message ID
+        submission_message = await message_queue.send_immediate_message(
             chat_id=chat.id,
             text=SUBMISSION_TEMPLATE.format(url=validated_url),
             parse_mode=settings.DEFAULT_PARSE_MODE,
             reply_to_message_id=message.message_id,
             disable_web_page_preview=True,
-            context={"moderated_request": True, "request_id": request_id, "stage": "submission_confirmation"}
         )
-        submission_message = await message_queue.publish_and_return_placeholder(submission_msg)
 
         # 7. Store PendingReview in bot_data (URL as string for Redis compatibility)
         pending_review = schemas.PendingReview(
@@ -142,7 +138,7 @@ async def handle_request_message(
             submission_confirmation_message_id=submission_message.message_id,
         )
 
-        ReviewStorage.store_pending_review(context, pending_review)
+        await ReviewStorage.store_pending_review(context, pending_review)
 
         console.print(f"[green]Request {request_id} processed successfully[/green]")
 
@@ -245,15 +241,22 @@ async def _handle_toggle_callback(
     option: str,
 ) -> None:
     """Handle option toggles -> Update state and refresh keyboard."""
-    request_id = callback_data.split("_")[-1]  # Extract request_id from end
+    # Extract request_id by stripping the known prefix
+    prefix_map = {
+        "alt": CALLBACK_TOGGLE_ALT,
+        "force": CALLBACK_TOGGLE_FORCE,
+        "privdump": CALLBACK_TOGGLE_PRIVDUMP,
+    }
+    prefix = prefix_map[option]
+    request_id = callback_data[len(prefix):]
 
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     if not pending_review:
         await query.edit_message_text(" Request not found or expired")
         return
 
     # Update option state
-    options_state = ReviewStorage.get_options_state(context, request_id)
+    options_state = await ReviewStorage.get_options_state(context, request_id)
 
     if option == "alt":
         options_state.alt = not options_state.alt
@@ -262,7 +265,7 @@ async def _handle_toggle_callback(
     elif option == "privdump":
         options_state.privdump = not options_state.privdump
 
-    ReviewStorage.update_options_state(context, request_id, options_state)
+    await ReviewStorage.update_options_state(context, request_id, options_state)
 
     # Refresh keyboard with updated state
     await query.edit_message_reply_markup(
@@ -277,12 +280,12 @@ async def _handle_submit_callback(
     request_id = callback_data[len(CALLBACK_SUBMIT_ACCEPTANCE) :]
     console.print(f"[magenta]=== SUBMIT CALLBACK STARTED for request {request_id} ===[/magenta]")
 
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     if not pending_review:
         await query.edit_message_text(" Request not found or expired")
         return
 
-    options_state = ReviewStorage.get_options_state(context, request_id)
+    options_state = await ReviewStorage.get_options_state(context, request_id)
 
     try:
         # Create DumpArguments with the selected options

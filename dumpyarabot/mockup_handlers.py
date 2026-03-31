@@ -94,17 +94,17 @@ async def _renew_expired_mockup_session(
     )
 
     # Store the renewed mockup review and initialize state
-    ReviewStorage.store_pending_review(context, mockup_review)
+    await ReviewStorage.store_pending_review(context, mockup_review)
     mockup_state = MockupState(
         request_id=request_id,
         current_menu="initial",
         original_command_message_id=controls_message_id,
     )
-    ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+    await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
     # Initialize options state
     options_state = AcceptOptionsState()
-    ReviewStorage.update_options_state(context, request_id, options_state)
+    await ReviewStorage.update_options_state(context, request_id, options_state)
 
     return mockup_review, mockup_state
 
@@ -200,7 +200,7 @@ async def _handle_mockup_reset(
     """Reset the mockup to initial state (Accept/Reject buttons)."""
     request_id = callback_data[len(CALLBACK_MOCKUP_RESET) :]
 
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     if not pending_review:
         # Seamlessly renew expired mockup session
         pending_review, mockup_state = await _renew_expired_mockup_session(
@@ -238,7 +238,7 @@ async def _handle_mockup_reset(
 
     # Reset options state to defaults
     options_state = AcceptOptionsState()
-    ReviewStorage.update_options_state(context, request_id, options_state)
+    await ReviewStorage.update_options_state(context, request_id, options_state)
 
     # Get the review message and reset it to initial state
     try:
@@ -272,8 +272,8 @@ async def _handle_mockup_back(
     """Navigate back one menu level based on current state."""
     request_id = callback_data[len(CALLBACK_MOCKUP_BACK) :]
 
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
-    mockup_state = ReviewStorage.get_mockup_state(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
+    mockup_state = await ReviewStorage.get_mockup_state(context, request_id)
 
     if not pending_review or not mockup_state:
         # Seamlessly renew expired mockup session
@@ -339,9 +339,9 @@ async def _handle_mockup_back(
         elif mockup_state.current_menu == "completed":
             # Go back from completed to options
             mockup_state.current_menu = "options"
-            ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+            await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
-            options_state = ReviewStorage.get_options_state(context, request_id)
+            options_state = await ReviewStorage.get_options_state(context, request_id)
 
             await context.bot.edit_message_text(
                 chat_id=pending_review.review_chat_id,
@@ -358,7 +358,7 @@ async def _handle_mockup_back(
         elif mockup_state.current_menu == "rejected":
             # Go back from rejected to initial (Accept/Reject)
             mockup_state.current_menu = "initial"
-            ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+            await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
             review_text = REVIEW_TEMPLATE.format(
                 username=pending_review.requester_username,
@@ -427,8 +427,8 @@ async def _handle_mockup_delete(
     """Delete all mockup messages and clean up storage."""
     request_id = callback_data[len(CALLBACK_MOCKUP_DELETE) :]
 
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
-    mockup_state = ReviewStorage.get_mockup_state(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
+    mockup_state = await ReviewStorage.get_mockup_state(context, request_id)
 
     if not pending_review or not mockup_state:
         # Seamlessly renew expired mockup session
@@ -487,9 +487,9 @@ async def _handle_mockup_delete(
             pass
 
         # Clean up storage before deleting controls message
-        ReviewStorage.remove_pending_review(context, request_id)
-        ReviewStorage.remove_options_state(context, request_id)
-        ReviewStorage.remove_mockup_state(context, request_id)
+        await ReviewStorage.remove_pending_review(context, request_id)
+        await ReviewStorage.remove_options_state(context, request_id)
+        await ReviewStorage.remove_mockup_state(context, request_id)
 
         # Delete the controls message (this one) - must be last
         await query.delete_message()
@@ -501,9 +501,9 @@ async def _handle_mockup_delete(
         except Exception:
             # If we can't edit the message, just clean up storage silently
             try:
-                ReviewStorage.remove_pending_review(context, request_id)
-                ReviewStorage.remove_options_state(context, request_id)
-                ReviewStorage.remove_mockup_state(context, request_id)
+                await ReviewStorage.remove_pending_review(context, request_id)
+                await ReviewStorage.remove_options_state(context, request_id)
+                await ReviewStorage.remove_mockup_state(context, request_id)
             except Exception:
                 pass
 
