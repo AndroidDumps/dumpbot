@@ -81,6 +81,17 @@ async def initialize_arq(context):
         console.print(f"[red]Failed to initialize ARQ: {e}[/red]")
 
 
+async def _startup_init(application):
+    """Initialize runtime services before polling starts."""
+    from types import SimpleNamespace
+
+    startup_context = SimpleNamespace(bot=application.bot, application=application)
+    await initialize_arq(startup_context)
+    await initialize_message_queue(startup_context)
+    await register_bot_commands(application)
+    await handle_post_restart_update(startup_context)
+
+
 async def register_bot_commands(application):
     """Register bot commands with Telegram for the menu interface."""
     from dumpyarabot.config import USER_COMMANDS
@@ -134,16 +145,7 @@ if __name__ == "__main__":
     application.add_handler(callback_handler)
     application.add_handler(restart_handler)
 
-    # Register bot commands on startup (if job queue is available)
-    if application.job_queue:
-        application.job_queue.run_once(initialize_arq, 1)
-
-        # Initialize message queue system
-        application.job_queue.run_once(initialize_message_queue, 2)
-
-        application.job_queue.run_once(register_bot_commands_job, 3)
-        # Handle post-restart message update
-        application.job_queue.run_once(handle_post_restart_update, 4)
+    application.post_init = _startup_init
 
     application.run_polling()
 
