@@ -587,6 +587,9 @@ class MessageQueue:
             "queued": JobStatus.QUEUED,
             "in_progress": JobStatus.PROCESSING,
             "complete": JobStatus.COMPLETED,
+            "completed": JobStatus.COMPLETED,
+            "failed": JobStatus.FAILED,
+            "cancelled": JobStatus.CANCELLED,
             "not_found": JobStatus.FAILED,
             "deferred": JobStatus.QUEUED
         }
