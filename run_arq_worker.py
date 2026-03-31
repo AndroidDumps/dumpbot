@@ -41,7 +41,7 @@ class ARQWorkerManager:
         try:
             # Create worker with our settings using the correct API
             self.worker = arq.Worker(
-                functions=WorkerSettings.functions,
+                functions=WorkerSettings.get_functions(),
                 redis_settings=WorkerSettings.redis_settings,
                 max_jobs=WorkerSettings.max_jobs,
                 job_timeout=WorkerSettings.job_timeout,
