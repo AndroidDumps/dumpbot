@@ -211,13 +211,13 @@ async def _handle_accept_callback(
     """Handle accept button -> Show options submenu."""
     request_id = callback_data[len(CALLBACK_ACCEPT) :]
 
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     if not pending_review:
         await query.edit_message_text(" Request not found or expired")
         return
 
     # Get current options state
-    options_state = ReviewStorage.get_options_state(context, request_id)
+    options_state = await ReviewStorage.get_options_state(context, request_id)
 
     # Update message to show options
     await query.edit_message_text(
@@ -409,7 +409,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         options = "".join(context.args[1:]) if len(context.args) > 1 else ""
 
     # Validate request_id exists in pending reviews
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     if not pending_review:
         await message_queue.send_error(
             chat_id=chat.id,
@@ -555,7 +555,7 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     # Validate request_id exists
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     if not pending_review:
         await message_queue.send_error(
             chat_id=chat.id,
@@ -631,7 +631,7 @@ async def _handle_cancel_callback(
     if not query.message:
         return
 
-    pending = ReviewStorage.get_pending_review(context, request_id)
+    pending = await ReviewStorage.get_pending_review(context, request_id)
 
     if not pending:
         await query.edit_message_text(

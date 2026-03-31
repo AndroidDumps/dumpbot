@@ -21,7 +21,7 @@ async def handle_post_restart_update(context):
     from rich.console import Console
     console = Console()
 
-    restart_info = RedisStorage.get_restart_message_info()
+    restart_info = await RedisStorage.get_restart_message_info()
 
     if restart_info:
         console.print(f"[blue]Found restart message info: {restart_info}[/blue]")
@@ -46,7 +46,7 @@ async def handle_post_restart_update(context):
 
         finally:
             # Clean up restart context
-            RedisStorage.clear_restart_message_info()
+            await RedisStorage.clear_restart_message_info()
     else:
         console.print("[yellow]No restart message info found in Redis[/yellow]")
 
@@ -147,4 +147,17 @@ if __name__ == "__main__":
     application.run_polling()
 
     if application.bot_data["restart"]:
+        # Graceful cleanup before restart
+        import asyncio
+        async def _shutdown():
+            try:
+                await message_queue.stop_consumer()
+            except Exception:
+                pass
+            try:
+                from dumpyarabot.arq_config import shutdown_arq
+                await shutdown_arq()
+            except Exception:
+                pass
+        asyncio.run(_shutdown())
         os.execl(sys.executable, sys.executable, "-m", "dumpyarabot")

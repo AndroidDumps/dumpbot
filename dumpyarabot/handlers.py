@@ -300,13 +300,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat: Optional[Chat] = update.effective_chat
     message: Optional[Message] = update.effective_message
     user = update.effective_user
-    
+
+    if not chat or not message or not user:
+        return
+
     # Ensure it can only be used in the correct group
     if chat.id not in settings.ALLOWED_CHATS:
         # Do nothing
-        return
-
-    if not chat or not message or not user:
         return
 
     # Check if user is admin to show admin commands
@@ -475,7 +475,7 @@ async def handle_restart_callback(update: Update, context: ContextTypes.DEFAULT_
 
         # Store restart context for post-restart message update in Redis
         from dumpyarabot.redis_storage import RedisStorage
-        RedisStorage.store_restart_message_info(
+        await RedisStorage.store_restart_message_info(
             chat_id=query.message.chat.id,
             message_id=query.message.message_id,
             user_mention=user.mention_markdown()

@@ -137,13 +137,13 @@ async def mockup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     # Store the mockup review and initialize state
-    ReviewStorage.store_pending_review(context, mockup_review)
+    await ReviewStorage.store_pending_review(context, mockup_review)
     mockup_state = MockupState(
         request_id=request_id,
         current_menu="initial",
         original_command_message_id=message.message_id,
     )
-    ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+    await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
     # Create production-like review message
     review_text = REVIEW_TEMPLATE.format(
@@ -162,7 +162,7 @@ async def mockup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Update the stored review with the actual message ID
     mockup_review.review_message_id = review_message.message_id
-    ReviewStorage.store_pending_review(context, mockup_review)
+    await ReviewStorage.store_pending_review(context, mockup_review)
 
     # Send compact control panel
     control_text = f"Mockup Controls ({request_id})"
@@ -314,7 +314,7 @@ async def _handle_mockup_back(
         if mockup_state.current_menu == "options":
             # Go back from options to initial (Accept/Reject)
             mockup_state.current_menu = "initial"
-            ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+            await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
             review_text = REVIEW_TEMPLATE.format(
                 username=pending_review.requester_username,
@@ -383,7 +383,7 @@ async def _handle_mockup_back(
         elif mockup_state.current_menu == "cancelled":
             # Go back from cancelled to initial (Accept/Reject)
             mockup_state.current_menu = "initial"
-            ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+            await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
             review_text = REVIEW_TEMPLATE.format(
                 username=pending_review.requester_username,
@@ -580,10 +580,10 @@ async def _handle_accept_callback_with_mockup_state(
     request_id = callback_data[len(CALLBACK_ACCEPT) :]
 
     # Update mockup state if this is a mockup request
-    mockup_state = ReviewStorage.get_mockup_state(context, request_id)
+    mockup_state = await ReviewStorage.get_mockup_state(context, request_id)
     if mockup_state:
         mockup_state.current_menu = "options"
-        ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+        await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
     # Delegate to main handler
     await moderated_handlers._handle_accept_callback(query, context, callback_data)
@@ -596,10 +596,10 @@ async def _handle_reject_callback_with_mockup_state(
     request_id = callback_data[len(CALLBACK_REJECT) :]
 
     # Update mockup state if this is a mockup request
-    mockup_state = ReviewStorage.get_mockup_state(context, request_id)
+    mockup_state = await ReviewStorage.get_mockup_state(context, request_id)
     if mockup_state:
         mockup_state.current_menu = "rejected"
-        ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+        await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
     # Delegate to main handler
     await moderated_handlers._handle_reject_callback(query, context, callback_data)
@@ -616,27 +616,27 @@ async def _handle_submit_callback_with_mockup_state(
     console.print(f"[magenta]=== ENHANCED SUBMIT CALLBACK for request {request_id} ===[/magenta]")
 
     # Check if this is a mockup request
-    mockup_state = ReviewStorage.get_mockup_state(context, request_id)
+    mockup_state = await ReviewStorage.get_mockup_state(context, request_id)
     console.print(f"[blue]Mockup state exists: {mockup_state is not None}[/blue]")
 
     # IMPORTANT: Only treat as mockup if it has BOTH mockup_state AND was created by /mockup command
     # Don't let auto-recovery create mockup state for real requests
-    pending_review = ReviewStorage.get_pending_review(context, request_id)
+    pending_review = await ReviewStorage.get_pending_review(context, request_id)
     is_real_mockup = mockup_state is not None and pending_review is not None and pending_review.original_chat_id == pending_review.review_chat_id
     console.print(f"[blue]Is real mockup (same chat): {is_real_mockup}[/blue]")
 
     if mockup_state and is_real_mockup:
         # Update mockup state to completed
         mockup_state.current_menu = "completed"
-        ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+        await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
         # For mockup requests, show a completion message instead of actually processing
-        pending_review = ReviewStorage.get_pending_review(context, request_id)
+        pending_review = await ReviewStorage.get_pending_review(context, request_id)
         if not pending_review:
             await query.edit_message_text(" Request not found or expired")
             return
 
-        options_state = ReviewStorage.get_options_state(context, request_id)
+        options_state = await ReviewStorage.get_options_state(context, request_id)
 
         # Show mockup completion message
         options_summary = []
@@ -676,11 +676,11 @@ async def _handle_cancel_callback_with_mockup_state(
     request_id = callback_data.replace(CALLBACK_CANCEL_REQUEST, "")
 
     # Check if this is a mockup request
-    mockup_state = ReviewStorage.get_mockup_state(context, request_id)
+    mockup_state = await ReviewStorage.get_mockup_state(context, request_id)
     if mockup_state:
         # Update mockup state to cancelled
         mockup_state.current_menu = "cancelled"
-        ReviewStorage.update_mockup_state(context, request_id, mockup_state)
+        await ReviewStorage.update_mockup_state(context, request_id, mockup_state)
 
         # For mockup, just show cancellation message
         await query.edit_message_text(
