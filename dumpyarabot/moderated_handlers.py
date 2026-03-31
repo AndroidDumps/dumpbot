@@ -47,6 +47,50 @@ async def _cleanup_request(context: ContextTypes.DEFAULT_TYPE, request_id: str) 
     await ReviewStorage.remove_options_state(context, request_id)
 
 
+async def _create_status_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    pending_review: schemas.PendingReview,
+    dump_args: schemas.DumpArguments,
+    job_id: str,
+) -> int:
+    """Create the bot-owned status message that later worker updates will edit."""
+    primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else pending_review.review_chat_id
+
+    if dump_args.use_privdump:
+        initial_text = " *Private Dump Job Queued*\n\n"
+    else:
+        initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{pending_review.url}`\n"
+
+    initial_text += f"ðŸ†” *Job ID:* `{job_id}`\n"
+
+    options_list = []
+    if dump_args.use_alt_dumper:
+        options_list.append("Alt Dumper")
+    if dump_args.force:
+        options_list.append("Force")
+    if dump_args.use_privdump:
+        options_list.append("Private")
+    if options_list:
+        initial_text += f" *Options:* {', '.join(options_list)}\n"
+
+    initial_text += f"\n{generate_progress_bar(None)}\n"
+    initial_text += " Queued for processing...\n\n"
+    initial_text += "â± *Elapsed:* 0s\n"
+    initial_text += " *Worker:* Waiting for assignment...\n"
+
+    status_message = await context.bot.send_message(
+        chat_id=primary_allowed_chat,
+        text=initial_text,
+        parse_mode=settings.DEFAULT_PARSE_MODE,
+        disable_web_page_preview=True,
+        reply_parameters=ReplyParameters(
+            message_id=pending_review.original_message_id,
+            chat_id=pending_review.original_chat_id,
+        ),
+    )
+    return status_message.message_id
+
+
 async def handle_request_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
