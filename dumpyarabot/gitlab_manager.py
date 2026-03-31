@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 from rich.console import Console
@@ -59,7 +60,7 @@ class GitLabManager:
         """Ensure GitLab subgroup exists, create if necessary."""
         console.print(f"[blue]Checking subgroup: {subgroup_name}[/blue]")
 
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             # Check if subgroup exists
             response = await client.get(
                 f"https://{self.gitlab_server}/api/v4/groups/{self.org}%2f{subgroup_name}",
@@ -99,7 +100,7 @@ class GitLabManager:
         """Ensure GitLab project exists, create if necessary."""
         console.print(f"[blue]Checking project: {repo_name}[/blue]")
 
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             # Check if project exists (using full path)
             response = await client.get(
                 f"https://{self.gitlab_server}/api/v4/projects/{self.org}%2f{repo_subgroup}%2f{repo_name}",
@@ -136,7 +137,7 @@ class GitLabManager:
 
     async def _branch_exists(self, project_id: int, branch: str, dumper_token: str) -> bool:
         """Check if branch already exists in project."""
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"https://{self.gitlab_server}/api/v4/projects/{project_id}/repository/branches/{branch}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
@@ -223,7 +224,7 @@ class GitLabManager:
         """Set the default branch for the project."""
         console.print(f"[blue]Setting default branch to: {branch}[/blue]")
 
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             response = await client.put(
                 f"https://{self.gitlab_server}/api/v4/projects/{project_id}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
@@ -258,7 +259,7 @@ class GitLabManager:
         )
 
         # Send to channel
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"https://api.telegram.org/bot{api_key}/sendMessage",
                 data={
@@ -287,8 +288,11 @@ class GitLabManager:
             with open(whitelist_file, 'r') as f:
                 whitelist_domains = [line.strip() for line in f if line.strip()]
 
+            hostname = (urlparse(url).hostname or "").lower()
+
             for domain in whitelist_domains:
-                if domain in url:
+                normalized_domain = domain.lower()
+                if hostname == normalized_domain or hostname.endswith(f".{normalized_domain}"):
                     console.print(f"[green]URL is whitelisted (domain: {domain})[/green]")
                     return True
 
