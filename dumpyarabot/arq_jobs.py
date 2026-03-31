@@ -98,12 +98,14 @@ async def _send_status_update(
 
     chat_id = initial_chat_id
 
-    # PRESERVE: Cross-chat logic for moderated system (exact original logic)
+    # Use cross-chat edits only for moderated requests that created a bot-owned status
+    # message in the primary allowed chat. Direct dumps should always edit in-place.
     dump_args_initial_message_id = job_data["dump_args"].get("initial_message_id")
+    is_moderated_request = bool(job_data.get("metadata", {}).get("telegram_context", {}).get("moderated_request"))
 
     primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else None
 
-    if dump_args_initial_message_id and primary_allowed_chat is not None and initial_chat_id != primary_allowed_chat:
+    if is_moderated_request and dump_args_initial_message_id and primary_allowed_chat is not None:
         # Cross-chat update for moderated system - edit with cross-chat reply
         await message_queue.send_cross_chat_edit(
             chat_id=primary_allowed_chat,
@@ -165,12 +167,14 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
 
         chat_id = initial_chat_id
 
-        # PRESERVE: Cross-chat logic for moderated system (exact original logic)
+        # Use cross-chat edits only for moderated requests that created a bot-owned
+        # status message in the primary allowed chat.
         dump_args_initial_message_id = job_data.get("dump_args", {}).get("initial_message_id")
+        is_moderated_request = bool(job_data.get("metadata", {}).get("telegram_context", {}).get("moderated_request"))
 
         primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else None
 
-        if dump_args_initial_message_id and primary_allowed_chat is not None and initial_chat_id != primary_allowed_chat:
+        if is_moderated_request and dump_args_initial_message_id and primary_allowed_chat is not None:
             # Cross-chat failure update for moderated system - edit with cross-chat reply
             await message_queue.send_cross_chat_edit(
                 chat_id=primary_allowed_chat,
