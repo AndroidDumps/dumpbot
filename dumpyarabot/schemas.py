@@ -1,5 +1,4 @@
-from datetime import datetime
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional, Any
 
@@ -94,5 +93,5 @@ class DumpJob(BaseModel):
 
     def __init__(self, **data):
         if "created_at" not in data:
-            data["created_at"] = datetime.utcnow()
+            data["created_at"] = datetime.now(timezone.utc)
         super().__init__(**data)
