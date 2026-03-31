@@ -1,4 +1,3 @@
-import json
 from typing import Any, Dict, Optional
 
 import redis
@@ -29,138 +28,94 @@ class RedisStorage:
     def get_pending_reviews(cls) -> Dict[str, Any]:
         """Get all pending reviews from Redis."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("pending_reviews")
-        data = redis_client.get(key)
-        if data:
-            return json.loads(data)
-        return {}
+        reviews = {}
+        for key in redis_client.scan_iter(match=cls._make_key("pending_reviews:*")):
+            data = redis_client.get(key)
+            if not data:
+                continue
+            review = PendingReview.model_validate_json(data)
+            reviews[review.request_id] = review.model_dump()
+        return reviews
 
     @classmethod
     def get_pending_review(cls, request_id: str) -> Optional[PendingReview]:
         """Get a specific pending review by request_id."""
-        reviews = cls.get_pending_reviews()
-        review_data = reviews.get(request_id)
-        if review_data:
-            if isinstance(review_data, dict):
-                return PendingReview(**review_data)
-            else:
-                return review_data
-        return None
+        redis_client = cls.get_redis_client()
+        key = cls._make_key(f"pending_reviews:{request_id}")
+        data = redis_client.get(key)
+        if not data:
+            return None
+        return PendingReview.model_validate_json(data)
 
     @classmethod
     def store_pending_review(cls, review: PendingReview) -> None:
         """Store a pending review."""
         redis_client = cls.get_redis_client()
-        reviews = cls.get_pending_reviews()
-        reviews[review.request_id] = review.model_dump()
-        key = cls._make_key("pending_reviews")
-        redis_client.set(key, json.dumps(reviews))
+        key = cls._make_key(f"pending_reviews:{review.request_id}")
+        redis_client.set(key, review.model_dump_json())
 
     @classmethod
     def remove_pending_review(cls, request_id: str) -> bool:
         """Remove a pending review. Returns True if removed, False if not found."""
         redis_client = cls.get_redis_client()
-        reviews = cls.get_pending_reviews()
-        if request_id in reviews:
-            del reviews[request_id]
-            key = cls._make_key("pending_reviews")
-            redis_client.set(key, json.dumps(reviews))
-            return True
-        return False
+        key = cls._make_key(f"pending_reviews:{request_id}")
+        return bool(redis_client.delete(key))
 
     @classmethod
     def get_options_state(cls, request_id: str) -> AcceptOptionsState:
         """Get options state for a request_id, creating default if not exists."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("options_states")
+        key = cls._make_key(f"options_states:{request_id}")
         data = redis_client.get(key)
 
-        if data:
-            states = json.loads(data)
-        else:
-            states = {}
+        if not data:
+            state = AcceptOptionsState()
+            redis_client.set(key, state.model_dump_json())
+            return state
 
-        if request_id not in states:
-            states[request_id] = AcceptOptionsState().model_dump()
-            redis_client.set(key, json.dumps(states))
-
-        return AcceptOptionsState(**states[request_id])
+        return AcceptOptionsState.model_validate_json(data)
 
     @classmethod
     def update_options_state(cls, request_id: str, options: AcceptOptionsState) -> None:
         """Update options state for a request_id."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("options_states")
-        data = redis_client.get(key)
-
-        if data:
-            states = json.loads(data)
-        else:
-            states = {}
-
-        states[request_id] = options.model_dump()
-        redis_client.set(key, json.dumps(states))
+        key = cls._make_key(f"options_states:{request_id}")
+        redis_client.set(key, options.model_dump_json())
 
     @classmethod
     def remove_options_state(cls, request_id: str) -> None:
         """Remove options state for a request_id."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("options_states")
-        data = redis_client.get(key)
-
-        if data:
-            states = json.loads(data)
-            if request_id in states:
-                del states[request_id]
-                redis_client.set(key, json.dumps(states))
+        key = cls._make_key(f"options_states:{request_id}")
+        redis_client.delete(key)
 
     @classmethod
     def get_mockup_state(cls, request_id: str) -> MockupState:
         """Get mockup state for a request_id, creating default if not exists."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("mockup_states")
+        key = cls._make_key(f"mockup_states:{request_id}")
         data = redis_client.get(key)
 
-        if data:
-            states = json.loads(data)
-        else:
-            states = {}
+        if not data:
+            state = MockupState(request_id=request_id)
+            redis_client.set(key, state.model_dump_json())
+            return state
 
-        if request_id not in states:
-            states[request_id] = MockupState(request_id=request_id).model_dump()
-            redis_client.set(key, json.dumps(states))
-
-        return MockupState(**states[request_id])
+        return MockupState.model_validate_json(data)
 
     @classmethod
     def update_mockup_state(cls, request_id: str, state: MockupState) -> None:
         """Update mockup state for a request_id."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("mockup_states")
-        data = redis_client.get(key)
-
-        if data:
-            states = json.loads(data)
-        else:
-            states = {}
-
-        states[request_id] = state.model_dump()
-        redis_client.set(key, json.dumps(states))
+        key = cls._make_key(f"mockup_states:{request_id}")
+        redis_client.set(key, state.model_dump_json())
 
     @classmethod
     def remove_mockup_state(cls, request_id: str) -> None:
         """Remove mockup state for a request_id."""
         redis_client = cls.get_redis_client()
-        key = cls._make_key("mockup_states")
-        data = redis_client.get(key)
-
-        if data:
-            states = json.loads(data)
-            if request_id in states:
-                del states[request_id]
-                redis_client.set(key, json.dumps(states))
-
-    @classmethod
+        key = cls._make_key(f"mockup_states:{request_id}")
+        redis_client.delete(key)
 
     @classmethod
     def store_restart_message_info(cls, chat_id: int, message_id: int, user_mention: str) -> None:
@@ -175,7 +130,7 @@ class RedisStorage:
                 "user_mention": user_mention
             }
 
-            redis_client.set(key, json.dumps(restart_info), ex=300)  # Expire after 5 minutes
+            redis_client.set(key, cls._serialize_dict(restart_info), ex=300)  # Expire after 5 minutes
 
         except Exception as e:
             from rich.console import Console
@@ -191,7 +146,7 @@ class RedisStorage:
 
             data = redis_client.get(key)
             if data:
-                return json.loads(data)
+                return cls._deserialize_dict(data)
             return None
 
         except Exception as e:
@@ -212,6 +167,18 @@ class RedisStorage:
             from rich.console import Console
             console = Console()
             console.print(f"[red]Error clearing restart message info: {e}[/red]")
+
+    @staticmethod
+    def _serialize_dict(data: Dict[str, Any]) -> str:
+        """Serialize a simple dictionary to JSON."""
+        import json
+        return json.dumps(data)
+
+    @staticmethod
+    def _deserialize_dict(data: str) -> Dict[str, Any]:
+        """Deserialize a simple dictionary from JSON."""
+        import json
+        return json.loads(data)
 
 
 # Backward compatibility adapter that wraps RedisStorage with bot_data interface
