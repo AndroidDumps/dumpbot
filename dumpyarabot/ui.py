@@ -10,7 +10,6 @@ CALLBACK_TOGGLE_FORCE = "toggle_force_"
 CALLBACK_TOGGLE_PRIVDUMP = "toggle_privdump_"
 CALLBACK_SUBMIT_ACCEPTANCE = "submit_accept_"
 CALLBACK_CANCEL_REQUEST = "cancel_req_"
-CALLBACK_JENKINS_CANCEL = "jenkins_cancel_"
 
 
 # Message Templates
@@ -95,14 +94,3 @@ def create_submission_keyboard(request_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def create_jenkins_cancel_keyboard(job_name: str, build_id: str) -> InlineKeyboardMarkup:
-    """Create Cancel button for Jenkins status messages."""
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                f" Cancel {job_name.title()} Job",
-                callback_data=f"{CALLBACK_JENKINS_CANCEL}{job_name}:{build_id}",
-            )
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)

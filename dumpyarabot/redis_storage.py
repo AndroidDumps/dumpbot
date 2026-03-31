@@ -5,7 +5,7 @@ import redis
 from telegram.ext import ContextTypes
 
 from dumpyarabot.config import settings
-from dumpyarabot.schemas import AcceptOptionsState, ActiveJenkinsBuild, MockupState, PendingReview
+from dumpyarabot.schemas import AcceptOptionsState, MockupState, PendingReview
 
 
 class RedisStorage:
@@ -161,47 +161,6 @@ class RedisStorage:
                 redis_client.set(key, json.dumps(states))
 
     @classmethod
-    def get_active_builds(cls) -> Dict[str, Any]:
-        """Get all active Jenkins builds from Redis."""
-        redis_client = cls.get_redis_client()
-        key = cls._make_key("active_builds")
-        data = redis_client.get(key)
-        if data:
-            return json.loads(data)
-        return {}
-
-    @classmethod
-    def store_active_build(cls, build: ActiveJenkinsBuild) -> None:
-        """Store an active Jenkins build."""
-        redis_client = cls.get_redis_client()
-        builds = cls.get_active_builds()
-        builds[build.build_id] = build.model_dump()
-        key = cls._make_key("active_builds")
-        redis_client.set(key, json.dumps(builds))
-
-    @classmethod
-    def get_active_build(cls, build_id: str) -> Optional[ActiveJenkinsBuild]:
-        """Get an active Jenkins build by build_id."""
-        builds = cls.get_active_builds()
-        build_data = builds.get(build_id)
-        if build_data:
-            if isinstance(build_data, dict):
-                return ActiveJenkinsBuild(**build_data)
-            else:
-                return build_data
-        return None
-
-    @classmethod
-    def remove_active_build(cls, build_id: str) -> bool:
-        """Remove an active Jenkins build. Returns True if removed, False if not found."""
-        redis_client = cls.get_redis_client()
-        builds = cls.get_active_builds()
-        if build_id in builds:
-            del builds[build_id]
-            key = cls._make_key("active_builds")
-            redis_client.set(key, json.dumps(builds))
-            return True
-        return False
 
     @classmethod
     def store_restart_message_info(cls, chat_id: int, message_id: int, user_mention: str) -> None:
@@ -327,28 +286,3 @@ class ReviewStorage:
         """Remove mockup state for a request_id."""
         RedisStorage.remove_mockup_state(request_id)
 
-    @staticmethod
-    def get_active_builds(context: ContextTypes.DEFAULT_TYPE) -> Dict[str, Any]:
-        """Get all active Jenkins builds."""
-        return RedisStorage.get_active_builds()
-
-    @staticmethod
-    def store_active_build(
-        context: ContextTypes.DEFAULT_TYPE, build: ActiveJenkinsBuild
-    ) -> None:
-        """Store an active Jenkins build."""
-        RedisStorage.store_active_build(build)
-
-    @staticmethod
-    def get_active_build(
-        context: ContextTypes.DEFAULT_TYPE, build_id: str
-    ) -> Optional[ActiveJenkinsBuild]:
-        """Get an active Jenkins build by build_id."""
-        return RedisStorage.get_active_build(build_id)
-
-    @staticmethod
-    def remove_active_build(
-        context: ContextTypes.DEFAULT_TYPE, build_id: str
-    ) -> bool:
-        """Remove an active Jenkins build. Returns True if removed, False if not found."""
-        return RedisStorage.remove_active_build(build_id)

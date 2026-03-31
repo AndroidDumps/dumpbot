@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 
 from telegram.ext import ContextTypes
 
-from dumpyarabot.schemas import AcceptOptionsState, ActiveJenkinsBuild, MockupState, PendingReview
+from dumpyarabot.schemas import AcceptOptionsState, MockupState, PendingReview
 
 # Check if Redis is available and configured
 try:
@@ -158,56 +158,4 @@ class ReviewStorage:
                 and request_id in context.bot_data["mockup_states"]
             ):
                 del context.bot_data["mockup_states"][request_id]
-
-    @staticmethod
-    def get_active_builds(context: ContextTypes.DEFAULT_TYPE) -> Dict[str, Any]:
-        """Get all active Jenkins builds."""
-        if USE_REDIS:
-            return RedisReviewStorage.get_active_builds(context)
-        else:
-            if "active_builds" not in context.bot_data:
-                context.bot_data["active_builds"] = {}
-            return context.bot_data["active_builds"]
-
-    @staticmethod
-    def store_active_build(
-        context: ContextTypes.DEFAULT_TYPE, build: ActiveJenkinsBuild
-    ) -> None:
-        """Store an active Jenkins build."""
-        if USE_REDIS:
-            RedisReviewStorage.store_active_build(context, build)
-        else:
-            builds = ReviewStorage.get_active_builds(context)
-            builds[build.build_id] = build.model_dump()
-
-    @staticmethod
-    def get_active_build(
-        context: ContextTypes.DEFAULT_TYPE, build_id: str
-    ) -> Optional[ActiveJenkinsBuild]:
-        """Get an active Jenkins build by build_id."""
-        if USE_REDIS:
-            return RedisReviewStorage.get_active_build(context, build_id)
-        else:
-            builds = ReviewStorage.get_active_builds(context)
-            build_data = builds.get(build_id)
-            if build_data:
-                if isinstance(build_data, dict):
-                    return ActiveJenkinsBuild(**build_data)
-                else:
-                    return build_data
-            return None
-
-    @staticmethod
-    def remove_active_build(
-        context: ContextTypes.DEFAULT_TYPE, build_id: str
-    ) -> bool:
-        """Remove an active Jenkins build. Returns True if removed, False if not found."""
-        if USE_REDIS:
-            return RedisReviewStorage.remove_active_build(context, build_id)
-        else:
-            builds = ReviewStorage.get_active_builds(context)
-            if build_id in builds:
-                del builds[build_id]
-                return True
-            return False
 

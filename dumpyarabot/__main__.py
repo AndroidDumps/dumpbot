@@ -4,7 +4,8 @@ import sys
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
                           CommandHandler, MessageHandler, filters, JobQueue)
 
-from dumpyarabot.handlers import blacklist, cancel_dump, dump, help_command, restart
+from dumpyarabot.handlers import blacklist, cancel_dump, dump, help_command, restart, status
+from dumpyarabot.message_queue import message_queue
 from dumpyarabot.mockup_handlers import (handle_enhanced_callback_query,
                                          mockup_command)
 from dumpyarabot.moderated_handlers import (accept_command,
@@ -26,27 +27,58 @@ async def handle_post_restart_update(context):
         console.print(f"[blue]Found restart message info: {restart_info}[/blue]")
 
         try:
-            # Update the original restart message to confirm success
-            await context.bot.edit_message_text(
+            # Edit the existing confirmation message after startup.
+            await message_queue.send_status_update(
                 chat_id=restart_info["chat_id"],
-                message_id=restart_info["message_id"],
                 text=f" **Restart Complete**\n\n"
                      f" **Requested by:** {restart_info['user_mention']}\n"
                      f" **Status:** Bot successfully restarted and is now online!\n\n"
                      f"⏱ All operations are ready to resume.",
-                parse_mode="Markdown"
+                edit_message_id=restart_info["message_id"],
+                parse_mode=settings.DEFAULT_PARSE_MODE,
+                context={"restart_completion": True}
             )
 
-            console.print("[green]Successfully updated restart confirmation message[/green]")
+            console.print("[green]Queued restart confirmation edit[/green]")
 
         except Exception as e:
-            console.print(f"[yellow]Could not update restart message: {e}[/yellow]")
+            console.print(f"[yellow]Could not queue restart confirmation edit: {e}[/yellow]")
 
         finally:
             # Clean up restart context
             RedisStorage.clear_restart_message_info()
     else:
         console.print("[yellow]No restart message info found in Redis[/yellow]")
+
+
+async def initialize_message_queue(context):
+    """Initialize the message queue system."""
+    from rich.console import Console
+    console = Console()
+
+    try:
+        # Set the bot instance for the message queue
+        message_queue.set_bot(context.bot)
+
+        # Start the message consumer
+        await message_queue.start_consumer()
+
+        console.print("[green]Message queue system initialized successfully[/green]")
+    except Exception as e:
+        console.print(f"[red]Failed to initialize message queue: {e}[/red]")
+
+
+async def initialize_arq(context):
+    """Initialize the ARQ system."""
+    from dumpyarabot.arq_config import init_arq
+    from rich.console import Console
+    console = Console()
+
+    try:
+        await init_arq()
+        console.print("[green]ARQ system initialized successfully[/green]")
+    except Exception as e:
+        console.print(f"[red]Failed to initialize ARQ: {e}[/red]")
 
 
 async def register_bot_commands(application):
@@ -66,6 +98,7 @@ if __name__ == "__main__":
     dump_handler = CommandHandler("dump", dump)
     blacklist_handler = CommandHandler("blacklist", blacklist)
     cancel_dump_handler = CommandHandler("cancel", cancel_dump)
+    status_handler = CommandHandler("status", status)
     help_handler = CommandHandler("help", help_command)
 
     # Mockup handler for testing UI flow
@@ -88,6 +121,7 @@ if __name__ == "__main__":
     application.add_handler(dump_handler)
     application.add_handler(blacklist_handler)
     application.add_handler(cancel_dump_handler)
+    application.add_handler(status_handler)
     application.add_handler(help_handler)
     application.add_handler(mockup_handler)
     application.add_handler(accept_handler)
@@ -98,11 +132,15 @@ if __name__ == "__main__":
 
     # Register bot commands on startup (if job queue is available)
     if application.job_queue:
+
+        # Initialize message queue system
+        application.job_queue.run_once(initialize_message_queue, 1)
+
         application.job_queue.run_once(
-            lambda context: register_bot_commands(application), 0
+            lambda context: register_bot_commands(application), 2
         )
         # Handle post-restart message update
-        application.job_queue.run_once(handle_post_restart_update, 1)
+        application.job_queue.run_once(handle_post_restart_update, 3)
 
     application.run_polling()
 
