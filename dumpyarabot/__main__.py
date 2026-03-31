@@ -4,7 +4,7 @@ import sys
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
                           CommandHandler, MessageHandler, filters, JobQueue)
 
-from dumpyarabot.handlers import blacklist, cancel_dump, dump, help_command, restart, status
+from dumpyarabot.handlers import cancel_dump, dump, help_command, restart, status
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.mockup_handlers import (handle_enhanced_callback_query,
                                          mockup_command)
@@ -88,7 +88,13 @@ async def register_bot_commands(application):
 
     # Register user commands (visible to all users)
     commands = [BotCommand(cmd, desc) for cmd, desc in USER_COMMANDS]
-    application.bot.delete_my_commands
+    await application.bot.delete_my_commands()
+    await application.bot.set_my_commands(commands)
+
+
+async def register_bot_commands_job(context):
+    """JobQueue adapter for bot command registration."""
+    await register_bot_commands(context.application)
 
 if __name__ == "__main__":
     application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).job_queue(JobQueue()).build()
@@ -96,7 +102,6 @@ if __name__ == "__main__":
 
     # Existing handlers
     dump_handler = CommandHandler("dump", dump)
-    blacklist_handler = CommandHandler("blacklist", blacklist)
     cancel_dump_handler = CommandHandler("cancel", cancel_dump)
     status_handler = CommandHandler("status", status)
     help_handler = CommandHandler("help", help_command)
@@ -119,7 +124,6 @@ if __name__ == "__main__":
 
     # Add all handlers
     application.add_handler(dump_handler)
-    application.add_handler(blacklist_handler)
     application.add_handler(cancel_dump_handler)
     application.add_handler(status_handler)
     application.add_handler(help_handler)
@@ -136,9 +140,7 @@ if __name__ == "__main__":
         # Initialize message queue system
         application.job_queue.run_once(initialize_message_queue, 1)
 
-        application.job_queue.run_once(
-            lambda context: register_bot_commands(application), 2
-        )
+        application.job_queue.run_once(register_bot_commands_job, 2)
         # Handle post-restart message update
         application.job_queue.run_once(handle_post_restart_update, 3)
 

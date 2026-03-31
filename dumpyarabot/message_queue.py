@@ -5,14 +5,14 @@ from enum import Enum
 from typing import Any, Dict, Optional, List
 
 import redis.asyncio as redis
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rich.console import Console
 from telegram import Bot
 from telegram.error import RetryAfter, TelegramError, NetworkError
 import telegram
 
 from dumpyarabot.config import settings
-from dumpyarabot.schemas import DumpJob, JobStatus
+from dumpyarabot.schemas import DumpArguments, DumpJob, JobProgress, JobStatus
 
 console = Console()
 

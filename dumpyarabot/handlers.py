@@ -153,7 +153,7 @@ async def dump(
 
         console.print(f"[green]Dump job {job_id} queued with enhanced metadata[/green]")
 
-    except ValidationError as e:
+    except ValueError as e:
         console.print(f"[red]Invalid URL provided: {url} - {e}[/red]")
         response_text = f" *Invalid URL:* {url}\n\nPlease provide a valid firmware download URL."
 
