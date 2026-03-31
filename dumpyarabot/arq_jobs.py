@@ -5,6 +5,7 @@ while preserving all Telegram messaging features and cross-chat functionality.
 """
 
 import asyncio
+import re
 import tempfile
 import traceback
 from datetime import datetime, timezone
@@ -22,6 +23,21 @@ from dumpyarabot.property_extractor import PropertyExtractor
 from dumpyarabot.message_formatting import format_comprehensive_progress_message
 
 console = Console()
+
+# Patterns to sanitize from tracebacks to prevent credential exposure
+_SENSITIVE_PATTERNS = [
+    re.compile(r'(Bearer\s+)\S+', re.IGNORECASE),
+    re.compile(r'(Authorization:\s*)\S+', re.IGNORECASE),
+    re.compile(r'(token[=:]\s*)\S+', re.IGNORECASE),
+    re.compile(r'(password[=:]\s*)\S+', re.IGNORECASE),
+]
+
+
+def _sanitize_traceback(tb_str: str) -> str:
+    """Remove sensitive tokens and credentials from traceback strings."""
+    for pattern in _SENSITIVE_PATTERNS:
+        tb_str = pattern.sub(r'\1[REDACTED]', tb_str)
+    return tb_str
 
 
 class PeriodicTimerUpdate:
@@ -193,6 +209,19 @@ async def _validate_gitlab_access() -> None:
         raise Exception(f"Cannot access GitLab server: {e}")
 
 
+async def _check_cancellation(ctx) -> bool:
+    """Check if the current ARQ job has been aborted."""
+    try:
+        if asyncio.current_task().cancelled():
+            return True
+        # Check ARQ's abort flag if available
+        if hasattr(ctx, 'abort'):
+            return ctx.abort
+    except Exception:
+        pass
+    return False
+
+
 async def update_progress_with_metadata(
     job_data: Dict[str, Any],
     step: str,
@@ -200,6 +229,11 @@ async def update_progress_with_metadata(
     extra_info: Optional[Dict[str, Any]] = None
 ) -> None:
     """Helper function for progress updates with metadata tracking."""
+    # Check for cancellation at each progress update
+    ctx = job_data.get("_arq_ctx")
+    if ctx and await _check_cancellation(ctx):
+        raise asyncio.CancelledError("Job cancelled by user")
+
     metadata = job_data["metadata"]
 
     progress_update = {
@@ -238,6 +272,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
     # Add ARQ job context to job_data for tracking
     job_data["arq_job_id"] = getattr(ctx, 'job_id', None)
+    job_data["_arq_ctx"] = ctx  # Store ctx for cancellation checks
 
     try:
         # Create temporary work directory
@@ -370,7 +405,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                         "current_step": job_data.get("progress", {}).get("current_step", "Unknown step"),
                         "last_successful_step": job_data["metadata"]["progress_history"][-1]["message"] if job_data["metadata"]["progress_history"] else "None",
                         "failure_time": datetime.now(timezone.utc).isoformat(),
-                        "traceback": traceback.format_exc()
+                        "traceback": _sanitize_traceback(traceback.format_exc())
                     }
                 })
 
@@ -392,7 +427,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 "current_step": "Critical failure",
                 "last_successful_step": job_data["metadata"]["progress_history"][-1]["message"] if job_data["metadata"]["progress_history"] else "None",
                 "failure_time": datetime.now(timezone.utc).isoformat(),
-                "traceback": traceback.format_exc()
+                "traceback": _sanitize_traceback(traceback.format_exc())
             }
         })
 
