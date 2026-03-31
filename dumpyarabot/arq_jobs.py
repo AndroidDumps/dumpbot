@@ -325,26 +325,39 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 24.0}):
                     await extractor.extract_firmware(dump_job, firmware_path)
 
-                # Step 7: Python/Alternative dumper completed (28%)
+                # Step 7: Firmware extraction completed (28%)
                 await update_progress_with_metadata(job_data, " Firmware extraction completed", 28.0)
 
-                # Step 8: Partition extraction completed (32%)
-                await update_progress_with_metadata(job_data, " Partition extraction completed", 32.0)
+                # Step 8: Process boot images (32%)
+                await update_progress_with_metadata(job_data, " Processing boot images...", 32.0)
+                await extractor.process_boot_images()
 
-                # Step 9: Extracting device properties (36%)
-                await update_progress_with_metadata(job_data, " Extracting device properties...", 36.0)
+                # Step 9: Generate board-info.txt (36%)
+                await update_progress_with_metadata(job_data, " Generating board-info.txt...", 36.0)
+                await prop_extractor.generate_board_info()
+
+                # Step 10: Generate all_files.txt (40%)
+                await update_progress_with_metadata(job_data, " Generating all_files.txt...", 40.0)
+                await prop_extractor.generate_all_files_list()
+
+                # Step 11: Generate device tree (44%)
+                await update_progress_with_metadata(job_data, " Generating device tree...", 44.0)
+                await prop_extractor.generate_device_tree()
+
+                # Step 12: Extracting device properties (48%)
+                await update_progress_with_metadata(job_data, " Extracting device properties...", 48.0)
                 device_props = await prop_extractor.extract_properties()
                 job_data["metadata"]["device_info"] = device_props
-                await update_progress_with_metadata(job_data, " Device analysis completed", 48.0)
+                await update_progress_with_metadata(job_data, " Device analysis completed", 56.0)
 
-                # Step 13: Checking/creating GitLab subgroup (52%)
-                await update_progress_with_metadata(job_data, " Checking GitLab subgroup...", 52.0)
+                # Step 13: Checking/creating GitLab subgroup (60%)
+                await update_progress_with_metadata(job_data, " Checking GitLab subgroup...", 60.0)
 
-                # Step 14: Checking/creating GitLab project (56%)
-                await update_progress_with_metadata(job_data, " Checking GitLab project...", 56.0)
+                # Step 14: Checking/creating GitLab project (64%)
+                await update_progress_with_metadata(job_data, " Checking GitLab project...", 64.0)
 
-                # Step 15: Setting up git repository (60%)
-                await update_progress_with_metadata(job_data, " Creating GitLab repository...", 60.0)
+                # Step 15: Setting up git repository (68%)
+                await update_progress_with_metadata(job_data, " Creating GitLab repository...", 68.0)
 
                 # Get DUMPER_TOKEN from environment or settings
                 dumper_token = getattr(settings, 'DUMPER_TOKEN', None)
@@ -356,16 +369,20 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "current_step": "GitLab",
                     "total_steps": 25,
                     "current_step_number": 15,
-                    "percentage": 60.0,
+                    "percentage": 68.0,
                 }
                 async with PeriodicTimerUpdate(job_data, " Creating GitLab repository...", gitlab_progress):
-                    repo_url, repo_path = await gitlab_manager.create_and_push_repository(device_props, dumper_token)
+                    repo_url, repo_path = await gitlab_manager.create_and_push_repository(
+                        device_props,
+                        dumper_token,
+                        force=job_data["dump_args"].get("force", False),
+                    )
 
-                # Step 16: Preparing channel notification (64%)
-                await update_progress_with_metadata(job_data, " Preparing channel notification...", 64.0)
+                # Step 16: Preparing channel notification (76%)
+                await update_progress_with_metadata(job_data, " Preparing channel notification...", 76.0)
 
-                # Step 17: Sending notification (68%)
-                await update_progress_with_metadata(job_data, " Sending channel notification...", 68.0)
+                # Step 17: Sending notification (84%)
+                await update_progress_with_metadata(job_data, " Sending channel notification...", 84.0)
 
                 # Get API_KEY from environment or settings for channel notification
                 api_key = getattr(settings, 'API_KEY', None)
