@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, List
 
@@ -58,7 +58,7 @@ class QueuedMessage(BaseModel):
         if "message_id" not in data:
             data["message_id"] = str(uuid.uuid4())
         if "created_at" not in data:
-            data["created_at"] = datetime.utcnow()
+            data["created_at"] = datetime.now(timezone.utc)
         if "parse_mode" not in data or data.get("parse_mode") is None:
             data["parse_mode"] = settings.DEFAULT_PARSE_MODE
         super().__init__(**data)
@@ -332,7 +332,7 @@ class MessageQueue:
             MessagePriority.LOW
         ]
 
-        last_message_time = datetime.utcnow()
+        last_message_time = datetime.now(timezone.utc)
         rate_limit_delay = 0
 
         while self._running:
@@ -342,7 +342,7 @@ class MessageQueue:
                 due_messages = await redis_client.zrangebyscore(
                     delayed_key,
                     min=0,
-                    max=datetime.utcnow().timestamp(),
+                    max=datetime.now(timezone.utc).timestamp(),
                     start=0,
                     num=1,
                 )
@@ -365,12 +365,12 @@ class MessageQueue:
                             message_processed = True
 
                             # Implement basic rate limiting (30 messages/second max)
-                            now = datetime.utcnow()
+                            now = datetime.now(timezone.utc)
                             time_since_last = (now - last_message_time).total_seconds()
                             if time_since_last < 0.033:  # ~30 messages/second
                                 rate_limit_delay = 0.033 - time_since_last
                                 await asyncio.sleep(rate_limit_delay)
-                            last_message_time = datetime.utcnow()
+                            last_message_time = datetime.now(timezone.utc)
                         else:
                             # Re-queue failed message with incremented retry count
                             await self._handle_failed_message(message)
@@ -406,7 +406,6 @@ class MessageQueue:
 
             if message.parse_mode:
                 kwargs["parse_mode"] = message.parse_mode
-                message.parse_mode = settings.DEFAULT_PARSE_MODE
 
             if message.disable_web_page_preview is not None:
                 kwargs["disable_web_page_preview"] = message.disable_web_page_preview
@@ -450,7 +449,7 @@ class MessageQueue:
         except RetryAfter as e:
             console.print(f"[yellow]Rate limited by Telegram API. Retry after {e.retry_after} seconds[/yellow]")
             # Re-queue the message with a delay
-            message.scheduled_for = datetime.utcnow() + timedelta(seconds=e.retry_after)
+            message.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
             await self._requeue_message(message)
             return True  # Don't increment retry count for rate limits
 
@@ -458,7 +457,7 @@ class MessageQueue:
             console.print(f"[yellow]Network error processing message: {e}[/yellow]")
             # Simple retry with exponential backoff for network issues
             retry_delay = min(30 * (2 ** message.retry_count), 300)  # 30s, 60s, 120s, 240s, 300s max
-            message.scheduled_for = datetime.utcnow() + timedelta(seconds=retry_delay)
+            message.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=retry_delay)
             await self._requeue_message(message)
             return True  # Don't increment retry count for network issues
 
@@ -478,7 +477,7 @@ class MessageQueue:
             console.print(f"[yellow]Retrying message {message.message_id} (attempt {message.retry_count})[/yellow]")
             # Add exponential backoff delay
             delay = min(2 ** message.retry_count, 300)  # Max 5 minutes
-            message.scheduled_for = datetime.utcnow() + timedelta(seconds=delay)
+            message.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=delay)
             await self._requeue_message(message)
         else:
             console.print(f"[red]Message {message.message_id} exceeded max retries, moving to dead letter queue[/red]")
@@ -486,7 +485,7 @@ class MessageQueue:
 
     async def _requeue_message(self, message: QueuedMessage) -> None:
         """Re-queue a message, potentially with a delay."""
-        if message.scheduled_for and message.scheduled_for > datetime.utcnow():
+        if message.scheduled_for and message.scheduled_for > datetime.now(timezone.utc):
             # Use Redis to schedule the message
             redis_client = await self._get_redis()
             delay_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
@@ -501,6 +500,10 @@ class MessageQueue:
         redis_client = await self._get_redis()
         dlq_key = f"{settings.REDIS_KEY_PREFIX}dead_letter_queue"
         await redis_client.lpush(dlq_key, message.model_dump_json())
+
+        # Log DLQ size for monitoring
+        dlq_size = await redis_client.llen(dlq_key)
+        console.print(f"[red]Dead letter queue now has {dlq_size} message(s) - check with /status[/red]")
 
     async def _auto_delete_message(self, chat_id: int, message_id: int, delay: int) -> None:
         """Auto-delete a message after the specified delay."""
@@ -532,13 +535,22 @@ class MessageQueue:
 
     def _should_throttle_edit(self, message_id: str, min_interval: float = 2.0) -> bool:
         """Check if message edit should be throttled based on rate limiting."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         last_edit = self._last_edit_times.get(message_id)
 
         if last_edit and (now - last_edit).total_seconds() < min_interval:
             return True
 
         self._last_edit_times[message_id] = now
+
+        # Prune stale entries to prevent memory leak
+        if len(self._last_edit_times) > 1000:
+            cutoff = now - timedelta(minutes=5)
+            self._last_edit_times = {
+                k: v for k, v in self._last_edit_times.items()
+                if v > cutoff
+            }
+
         return False
 
     async def send_cross_chat_edit(
