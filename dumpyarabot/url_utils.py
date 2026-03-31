@@ -40,7 +40,7 @@ async def check_url_accessibility(url: str, timeout: int = 10) -> bool:
         True if URL is accessible (status code < 400), False otherwise
     """
     try:
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             response = await client.head(url, timeout=timeout, follow_redirects=True)
             return response.status_code < 400
     except Exception:
