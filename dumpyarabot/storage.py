@@ -35,7 +35,10 @@ class ReviewStorage:
     ) -> Optional[PendingReview]:
         """Get a specific pending review by request_id."""
         if USE_REDIS:
-            return await RedisReviewStorage.get_pending_review(context, request_id)
+            try:
+                return await RedisReviewStorage.get_pending_review(context, request_id)
+            except ValueError:
+                return None
         else:
             reviews = await ReviewStorage.get_pending_reviews(context)
             review_data = reviews.get(request_id)
@@ -63,7 +66,10 @@ class ReviewStorage:
     ) -> bool:
         """Remove a pending review. Returns True if removed, False if not found."""
         if USE_REDIS:
-            return await RedisReviewStorage.remove_pending_review(context, request_id)
+            try:
+                return await RedisReviewStorage.remove_pending_review(context, request_id)
+            except ValueError:
+                return False
         else:
             reviews = await ReviewStorage.get_pending_reviews(context)
             if request_id in reviews:
@@ -77,7 +83,10 @@ class ReviewStorage:
     ) -> AcceptOptionsState:
         """Get options state for a request_id, creating default if not exists."""
         if USE_REDIS:
-            return await RedisReviewStorage.get_options_state(context, request_id)
+            try:
+                return await RedisReviewStorage.get_options_state(context, request_id)
+            except ValueError:
+                return AcceptOptionsState()
         else:
             if "options_states" not in context.bot_data:
                 context.bot_data["options_states"] = {}
@@ -94,7 +103,10 @@ class ReviewStorage:
     ) -> None:
         """Update options state for a request_id."""
         if USE_REDIS:
-            await RedisReviewStorage.update_options_state(context, request_id, options)
+            try:
+                await RedisReviewStorage.update_options_state(context, request_id, options)
+            except ValueError:
+                return
         else:
             if "options_states" not in context.bot_data:
                 context.bot_data["options_states"] = {}
@@ -107,7 +119,10 @@ class ReviewStorage:
     ) -> None:
         """Remove options state for a request_id."""
         if USE_REDIS:
-            await RedisReviewStorage.remove_options_state(context, request_id)
+            try:
+                await RedisReviewStorage.remove_options_state(context, request_id)
+            except ValueError:
+                return
         else:
             if (
                 "options_states" in context.bot_data
@@ -121,7 +136,10 @@ class ReviewStorage:
     ) -> MockupState:
         """Get mockup state for a request_id, creating default if not exists."""
         if USE_REDIS:
-            return await RedisReviewStorage.get_mockup_state(context, request_id)
+            try:
+                return await RedisReviewStorage.get_mockup_state(context, request_id)
+            except ValueError:
+                return MockupState(request_id=request_id)
         else:
             if "mockup_states" not in context.bot_data:
                 context.bot_data["mockup_states"] = {}
@@ -138,7 +156,10 @@ class ReviewStorage:
     ) -> None:
         """Update mockup state for a request_id."""
         if USE_REDIS:
-            await RedisReviewStorage.update_mockup_state(context, request_id, state)
+            try:
+                await RedisReviewStorage.update_mockup_state(context, request_id, state)
+            except ValueError:
+                return
         else:
             if "mockup_states" not in context.bot_data:
                 context.bot_data["mockup_states"] = {}
@@ -151,7 +172,10 @@ class ReviewStorage:
     ) -> None:
         """Remove mockup state for a request_id."""
         if USE_REDIS:
-            await RedisReviewStorage.remove_mockup_state(context, request_id)
+            try:
+                await RedisReviewStorage.remove_mockup_state(context, request_id)
+            except ValueError:
+                return
         else:
             if (
                 "mockup_states" in context.bot_data
