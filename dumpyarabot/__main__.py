@@ -108,7 +108,11 @@ async def register_bot_commands_job(context):
     await register_bot_commands(context.application)
 
 if __name__ == "__main__":
-    application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).job_queue(JobQueue()).build()
+    builder = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).job_queue(JobQueue())
+    if settings.TELEGRAM_API_BASE_URL:
+        base = settings.TELEGRAM_API_BASE_URL.rstrip("/")
+        builder = builder.base_url(f"{base}/bot").base_file_url(f"{base}/file/bot")
+    application = builder.build()
     application.bot_data["restart"] = False
 
     # Existing handlers

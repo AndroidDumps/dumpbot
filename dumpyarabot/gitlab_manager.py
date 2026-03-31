@@ -274,10 +274,15 @@ class GitLabManager:
             device_props, repo_url, download_url
         )
 
-        # Send to channel
+        # Send to channel via Telegram API (use custom base URL if configured)
+        api_base = settings.TELEGRAM_API_BASE_URL
+        if api_base:
+            api_base = api_base.rstrip("/")
+        else:
+            api_base = "https://api.telegram.org"
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"https://api.telegram.org/bot{api_key}/sendMessage",
+                f"{api_base}/bot{api_key}/sendMessage",
                 data={
                     "text": message,
                     "chat_id": "@android_dumps",

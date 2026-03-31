@@ -4,6 +4,7 @@
 [[ -z ${GITLAB_SERVER} ]] && GITLAB_SERVER="dumps.tadiphone.dev"
 [[ -z ${PUSH_HOST} ]] && PUSH_HOST="dumps"
 [[ -z $ORG ]] && ORG="dumps"
+[[ -z ${TELEGRAM_API_BASE_URL} ]] && TELEGRAM_API_BASE_URL="https://api.telegram.org"
 
 CHAT_ID="-1001412293127"
 
@@ -16,7 +17,7 @@ CHAT_ID="-1001412293127"
 # Uses global var API_KEY
 sendTG() {
     local mode="${1:?Error: Missing mode}" && shift
-    local api_url="https://api.telegram.org/bot${API_KEY:?}"
+    local api_url="${TELEGRAM_API_BASE_URL}/bot${API_KEY:?}"
     if [[ ${mode} =~ normal ]]; then
         curl --compressed -s "${api_url}/sendmessage" --data "text=$(urlEncode "${*:?Error: Missing message text.}")&chat_id=${CHAT_ID:?}&parse_mode=HTML&disable_web_page_preview=True"
     elif [[ ${mode} =~ reply ]]; then
@@ -39,7 +40,7 @@ sendTG() {
 # Uses global vars API_KEY, BUILD_ID, JOB_NAME
 sendTG_with_cancel() {
     local mode="${1:?Error: Missing mode}" && shift
-    local api_url="https://api.telegram.org/bot${API_KEY:?}"
+    local api_url="${TELEGRAM_API_BASE_URL}/bot${API_KEY:?}"
 
     # Create cancel button inline keyboard
     local job_name="${JOB_NAME,,}"  # Convert to lowercase
@@ -925,6 +926,6 @@ tg_html_text="<b>Brand</b>: <code>$brand</code>
 [<a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">repo</a>] $link"
 
 # Send message to Telegram channel
-curl --compressed -s "https://api.telegram.org/bot${API_KEY}/sendmessage" --data "text=${tg_html_text}&chat_id=@android_dumps&parse_mode=HTML&disable_web_page_preview=True" > /dev/null
+curl --compressed -s "${TELEGRAM_API_BASE_URL}/bot${API_KEY}/sendmessage" --data "text=${tg_html_text}&chat_id=@android_dumps&parse_mode=HTML&disable_web_page_preview=True" > /dev/null
 
 terminate 0

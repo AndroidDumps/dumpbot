@@ -1,4 +1,5 @@
-from pydantic import AnyHttpUrl
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,11 +22,16 @@ class Settings(BaseSettings):
     # Telegram formatting configuration
     DEFAULT_PARSE_MODE: str = "Markdown"
 
+    # Optional custom base URL for Telegram Bot API (e.g. nginx reverse proxy)
+    # Default: https://api.telegram.org/bot
+    TELEGRAM_API_BASE_URL: Optional[str] = None
+
 
     model_config = SettingsConfigDict(env_file=".env", extra='ignore')
 
 
 settings = Settings()
+
 
 # Callback data prefixes
 CALLBACK_ACCEPT = "accept_"
