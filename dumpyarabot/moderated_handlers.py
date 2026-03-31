@@ -138,10 +138,10 @@ async def handle_request_message(
         message_without_url = re.sub(r'#request\s*', '', message_without_url).strip()
         original_message = _truncate_message(message_without_url) if message_without_url else "No additional text"
         review_text = REVIEW_TEMPLATE.format(
-            username=user.username or user.first_name or str(user.id),
-            url=validated_url,
+            username=escape_markdown(user.username or user.first_name or str(user.id)),
+            url=escape_markdown(str(validated_url)),
             request_id=request_id,
-            original_message=original_message,
+            original_message=escape_markdown(original_message),
         )
 
         # Send review message directly to get real Telegram message ID
@@ -367,7 +367,8 @@ async def _handle_submit_callback(
                 "chat_id": pending_review.original_chat_id,
                 "message_id": pending_review.original_message_id,
                 "user_id": pending_review.requester_id,
-                "url": pending_review.url
+                "url": pending_review.url,
+                "moderated_request": True,
             }
         }
 
@@ -515,7 +516,8 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "chat_id": pending_review.original_chat_id,
                 "message_id": pending_review.original_message_id,
                 "user_id": pending_review.requester_id,
-                "url": pending_review.url
+                "url": pending_review.url,
+                "moderated_request": True,
             }
         }
 
