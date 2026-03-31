@@ -47,9 +47,9 @@ def create_options_keyboard(
     """Create toggle buttons for each option + Submit button with current state checkmarks."""
 
     # Create toggle buttons with checkmarks for enabled options
-    alt_text = f"{'' if current_state.alt else ''} Alternative Dumper"
-    force_text = f"{'' if current_state.force else ''} Force Re-Dump"
-    privdump_text = f"{'' if current_state.privdump else ''} Private Dump"
+    alt_text = f"{'YES ' if current_state.alt else 'NO '}Alternative Dumper"
+    force_text = f"{'YES ' if current_state.force else 'NO '}Force Re-Dump"
+    privdump_text = f"{'YES ' if current_state.privdump else 'NO '}Private Dump"
 
     keyboard = [
         [
