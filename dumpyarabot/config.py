@@ -32,7 +32,6 @@ CALLBACK_ACCEPT = "accept_"
 CALLBACK_REJECT = "reject_"
 CALLBACK_TOGGLE_ALT = "toggle_alt_"
 CALLBACK_TOGGLE_FORCE = "toggle_force_"
-CALLBACK_TOGGLE_BLACKLIST = "toggle_blacklist_"
 CALLBACK_TOGGLE_PRIVDUMP = "toggle_privdump_"
 CALLBACK_SUBMIT_ACCEPTANCE = "submit_accept_"
 CALLBACK_CANCEL_REQUEST = "cancel_req_"
@@ -40,7 +39,6 @@ CALLBACK_CANCEL_REQUEST = "cancel_req_"
 # Bot command definitions for Telegram menu
 USER_COMMANDS = [
     ("dump", "Start a firmware dump with URL and options"),
-    ("blacklist", "Add a URL to the blacklist"),
     ("help", "Show available commands and usage")
 ]
 
