@@ -18,6 +18,7 @@ from dumpyarabot.config import settings
 from dumpyarabot.firmware_downloader import FirmwareDownloader
 from dumpyarabot.firmware_extractor import FirmwareExtractor
 from dumpyarabot.gitlab_manager import GitLabManager
+from dumpyarabot.schemas import DumpJob
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.property_extractor import PropertyExtractor
 from dumpyarabot.message_formatting import format_comprehensive_progress_message

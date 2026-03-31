@@ -4,12 +4,12 @@ This module provides ARQ configuration and connection pool management
 that integrates with the existing Redis configuration.
 """
 
-import asyncio
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import arq
 from arq import ArqRedis
+from arq.constants import health_check_key_suffix, in_progress_key_prefix
 from rich.console import Console
 
 from dumpyarabot.config import settings
@@ -95,7 +95,7 @@ class ARQPool:
         """Enqueue a job using ARQ."""
         pool = await self.get_pool()
 
-        job_id = await pool.enqueue_job(
+        job = await pool.enqueue_job(
             function_name,
             *args,
             _job_id=job_id,
@@ -103,27 +103,56 @@ class ARQPool:
             **kwargs
         )
 
-        console.print(f"[green]Enqueued ARQ job {job_id} ({function_name}) to queue {WorkerSettings.queue_name}[/green]")
-        return job_id
+        if job is None:
+            raise RuntimeError(f"Job {job_id!r} already exists in queue or results")
+
+        console.print(f"[green]Enqueued ARQ job {job.job_id} ({function_name}) to queue {WorkerSettings.queue_name}[/green]")
+        return job.job_id
 
     async def get_job_status(self, job_id: str) -> Optional[dict]:
         """Get job status from ARQ."""
         pool = await self.get_pool()
 
         try:
-            job_result = await arq.jobs.JobResult.create(pool, job_id)
-
-            if job_result is None:
+            job = arq.jobs.Job(job_id, pool, _queue_name=WorkerSettings.queue_name)
+            status = await job.status()
+            if status == arq.jobs.JobStatus.not_found:
                 return None
+
+            job_info = await job.info()
+            result_info = await job.result_info()
+
+            payload: Optional[Dict[str, Any]] = None
+            source_info = job_info or result_info
+            if source_info and source_info.args:
+                first_arg = source_info.args[0]
+                if isinstance(first_arg, dict):
+                    payload = first_arg
+
+            metadata = {}
+            if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
+                metadata = payload["metadata"]
+            if result_info and isinstance(result_info.result, dict) and isinstance(result_info.result.get("metadata"), dict):
+                metadata = result_info.result["metadata"]
+
+            status_value = status.value
+            if result_info:
+                if metadata.get("status") in {"completed", "failed", "cancelled"}:
+                    status_value = metadata["status"]
+                elif result_info.success:
+                    status_value = "completed"
+                else:
+                    status_value = "failed"
 
             return {
                 "job_id": job_id,
-                "status": job_result.status.name if job_result.status else "unknown",
-                "result": job_result.result,
-                "enqueue_time": job_result.enqueue_time.isoformat() if job_result.enqueue_time else None,
-                "start_time": job_result.start_time.isoformat() if job_result.start_time else None,
-                "finish_time": job_result.finish_time.isoformat() if job_result.finish_time else None,
-                "success": job_result.success
+                "status": status_value,
+                "result": result_info.result if result_info else None,
+                "enqueue_time": source_info.enqueue_time.isoformat() if source_info and source_info.enqueue_time else None,
+                "start_time": result_info.start_time.isoformat() if result_info else None,
+                "finish_time": result_info.finish_time.isoformat() if result_info else None,
+                "success": result_info.success if result_info else None,
+                "job_data": payload,
             }
         except Exception as e:
             console.print(f"[yellow]Could not get job status for {job_id}: {e}[/yellow]")
@@ -134,8 +163,12 @@ class ARQPool:
         pool = await self.get_pool()
 
         try:
-            # In newer ARQ versions, we try to abort the job
-            success = await pool.abort_job(job_id)
+            job = arq.jobs.Job(job_id, pool, _queue_name=WorkerSettings.queue_name)
+            status = await job.status()
+            if status == arq.jobs.JobStatus.not_found:
+                return False
+
+            success = await job.abort(timeout=5)
 
             if success:
                 console.print(f"[green]Cancelled ARQ job {job_id}[/green]")
@@ -153,10 +186,10 @@ class ARQPool:
 
         try:
             # Get queue length
-            queue_length = await pool.llen(WorkerSettings.queue_name)
+            queue_length = await pool.zcard(WorkerSettings.queue_name)
 
             # Get health check info (if available)
-            health_check_key = f"{WorkerSettings.queue_name}:health-check"
+            health_check_key = f"{WorkerSettings.queue_name}{health_check_key_suffix}"
             health_checks = await pool.lrange(health_check_key, 0, -1)
 
             return {
@@ -174,6 +207,53 @@ class ARQPool:
                 "pool_status": "error",
                 "error": str(e)
             }
+
+    async def get_active_job_ids(self) -> List[str]:
+        """Get queued and in-progress ARQ job ids."""
+        pool = await self.get_pool()
+
+        queued_job_ids = [
+            job_id.decode() if isinstance(job_id, bytes) else job_id
+            for job_id in await pool.zrange(WorkerSettings.queue_name, 0, -1)
+        ]
+        in_progress_job_ids = [
+            (key.decode() if isinstance(key, bytes) else key)[len(in_progress_key_prefix):]
+            for key in await pool.keys(f"{in_progress_key_prefix}*")
+        ]
+
+        return list(dict.fromkeys(queued_job_ids + in_progress_job_ids))
+
+    async def get_recent_job_results(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent completed ARQ job results for this queue."""
+        pool = await self.get_pool()
+        results = await pool.all_job_results()
+
+        filtered_results = [
+            result for result in results
+            if getattr(result, "queue_name", None) == WorkerSettings.queue_name
+        ]
+        filtered_results.sort(key=lambda result: result.finish_time, reverse=True)
+
+        recent: List[Dict[str, Any]] = []
+        for result in filtered_results[:limit]:
+            payload = None
+            if result.args:
+                first_arg = result.args[0]
+                if isinstance(first_arg, dict):
+                    payload = first_arg
+
+            recent.append({
+                "job_id": result.job_id,
+                "status": "completed" if result.success else "failed",
+                "result": result.result,
+                "enqueue_time": result.enqueue_time.isoformat() if result.enqueue_time else None,
+                "start_time": result.start_time.isoformat() if result.start_time else None,
+                "finish_time": result.finish_time.isoformat() if result.finish_time else None,
+                "success": result.success,
+                "job_data": payload,
+            })
+
+        return recent
 
     async def close(self):
         """Close the ARQ pool."""

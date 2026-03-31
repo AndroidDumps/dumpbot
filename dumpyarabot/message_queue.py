@@ -631,16 +631,16 @@ class MessageQueue:
 
     async def queue_dump_job_with_metadata(self, enhanced_job_data: Dict[str, Any]) -> str:
         """Queue a dump job with metadata support."""
-        from dumpyarabot.arq_config import arq_pool, get_job_result_ttl
+        from dumpyarabot.arq_config import arq_pool
 
         job_data = enhanced_job_data
 
-        # Enqueue to ARQ with metadata
-        arq_job = await arq_pool.enqueue_job(
+        # Enqueue to ARQ with metadata.
+        # Keep-result settings belong to the worker function/worker config, not enqueue kwargs.
+        await arq_pool.enqueue_job(
             "process_firmware_dump",
             job_data,
             job_id=enhanced_job_data["job_id"],
-            result_ttl=get_job_result_ttl("running")  # Initial TTL
         )
 
         console.print(f"[green]Queued ARQ dump job {enhanced_job_data['job_id']} with metadata[/green]")
@@ -654,11 +654,17 @@ class MessageQueue:
         if not arq_status:
             return None
 
-        # Extract metadata from ARQ result if available
-        result = arq_status.get("result", {})
-        metadata = result.get("metadata", {})
+        result = arq_status.get("result")
+        job_payload = arq_status.get("job_data") or {}
+        metadata = {}
+        if isinstance(job_payload.get("metadata"), dict):
+            metadata = job_payload["metadata"]
+        if isinstance(result, dict) and isinstance(result.get("metadata"), dict):
+            metadata = result["metadata"]
+
+        dump_args_data = job_payload.get("dump_args") or {}
         telegram_context = metadata.get("telegram_context") or {}
-        url = telegram_context.get("url")
+        url = telegram_context.get("url") or dump_args_data.get("url")
 
         if not url:
             return None
@@ -669,10 +675,10 @@ class MessageQueue:
             "status": self._arq_status_to_job_status(arq_status["status"]),
             "dump_args": DumpArguments(
                 url=url,
-                use_alt_dumper=False,
-                use_privdump=False,
-                initial_message_id=telegram_context.get("message_id"),
-                initial_chat_id=telegram_context.get("chat_id"),
+                use_alt_dumper=dump_args_data.get("use_alt_dumper", False),
+                use_privdump=dump_args_data.get("use_privdump", False),
+                initial_message_id=dump_args_data.get("initial_message_id") or telegram_context.get("message_id"),
+                initial_chat_id=dump_args_data.get("initial_chat_id") or telegram_context.get("chat_id"),
             ).model_dump(),
             "add_blacklist": False,
             "created_at": arq_status.get("enqueue_time"),
@@ -680,9 +686,11 @@ class MessageQueue:
             "completed_at": metadata.get("end_time"),
             "worker_id": "arq_worker",
             "error_details": metadata.get("error_context", {}).get("message") if metadata.get("error_context") else None,
-            "result_data": result,
+            "result_data": result if isinstance(result, dict) else None,
             "progress": self._extract_current_progress(metadata),
             "metadata": metadata,
+            "initial_message_id": job_payload.get("initial_message_id") or dump_args_data.get("initial_message_id"),
+            "initial_chat_id": job_payload.get("initial_chat_id") or dump_args_data.get("initial_chat_id"),
         }
 
         return DumpJob.model_validate(job_data)
@@ -703,16 +711,33 @@ class MessageQueue:
         return None
 
     async def get_active_jobs_with_metadata(self) -> List[DumpJob]:
-        """Get active jobs with metadata (placeholder - ARQ doesn't provide this directly)."""
-        # For now, return empty list - would need ARQ extension to track active jobs
-        # This could be implemented by maintaining a separate Redis set of active job IDs
-        return []
+        """Get active queued and running jobs with metadata."""
+        from dumpyarabot.arq_config import arq_pool
+
+        active_jobs: List[DumpJob] = []
+        for job_id in await arq_pool.get_active_job_ids():
+            job = await self.get_job_status(job_id)
+            if job and job.status in {JobStatus.QUEUED, JobStatus.PROCESSING}:
+                active_jobs.append(job)
+
+        active_jobs.sort(key=lambda job: job.created_at)
+        return active_jobs
 
     async def get_recent_jobs_with_metadata(self, limit: int = 10) -> List[DumpJob]:
-        """Get recent jobs with metadata (placeholder - ARQ doesn't provide this directly)."""
-        # For now, return empty list - would need ARQ extension or separate tracking
-        # This could be implemented by maintaining a Redis sorted set of recent jobs
-        return []
+        """Get recent completed or failed jobs with metadata."""
+        from dumpyarabot.arq_config import arq_pool
+
+        recent_jobs: List[DumpJob] = []
+        for result in await arq_pool.get_recent_job_results(limit=limit):
+            job = await self.get_job_status(result["job_id"])
+            if job:
+                recent_jobs.append(job)
+
+        recent_jobs.sort(
+            key=lambda job: job.completed_at or job.started_at or job.created_at,
+            reverse=True,
+        )
+        return recent_jobs[:limit]
 
     # Legacy methods (kept for backward compatibility during transition)
     async def get_next_job(self, worker_id: str) -> Optional[DumpJob]:

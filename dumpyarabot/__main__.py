@@ -30,9 +30,9 @@ async def handle_post_restart_update(context):
             # Edit the existing confirmation message after startup.
             await message_queue.send_status_update(
                 chat_id=restart_info["chat_id"],
-                text=f" **Restart Complete**\n\n"
-                     f" **Requested by:** {restart_info['user_mention']}\n"
-                     f" **Status:** Bot successfully restarted and is now online!\n\n"
+                text=f" *Restart Complete*\n\n"
+                     f" *Requested by:* {restart_info['user_mention']}\n"
+                     f" *Status:* Bot successfully restarted and is now online!\n\n"
                      f"⏱ All operations are ready to resume.",
                 edit_message_id=restart_info["message_id"],
                 parse_mode=settings.DEFAULT_PARSE_MODE,
@@ -136,13 +136,14 @@ if __name__ == "__main__":
 
     # Register bot commands on startup (if job queue is available)
     if application.job_queue:
+        application.job_queue.run_once(initialize_arq, 1)
 
         # Initialize message queue system
-        application.job_queue.run_once(initialize_message_queue, 1)
+        application.job_queue.run_once(initialize_message_queue, 2)
 
-        application.job_queue.run_once(register_bot_commands_job, 2)
+        application.job_queue.run_once(register_bot_commands_job, 3)
         # Handle post-restart message update
-        application.job_queue.run_once(handle_post_restart_update, 3)
+        application.job_queue.run_once(handle_post_restart_update, 4)
 
     application.run_polling()
 
