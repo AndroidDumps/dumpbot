@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 import secrets
 from typing import Any, Optional
 
-from pydantic import ValidationError
 from rich.console import Console
 from telegram import Chat, Message, ReplyParameters, Update
 from telegram.ext import ContextTypes
