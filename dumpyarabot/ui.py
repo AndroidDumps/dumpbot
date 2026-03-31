@@ -1,15 +1,10 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from dumpyarabot.config import (CALLBACK_ACCEPT, CALLBACK_CANCEL_REQUEST,
+                                CALLBACK_REJECT, CALLBACK_SUBMIT_ACCEPTANCE,
+                                CALLBACK_TOGGLE_ALT, CALLBACK_TOGGLE_FORCE,
+                                CALLBACK_TOGGLE_PRIVDUMP)
 from dumpyarabot.schemas import AcceptOptionsState
-
-# Callback data prefixes (duplicated from config to avoid import issues)
-CALLBACK_ACCEPT = "accept_"
-CALLBACK_REJECT = "reject_"
-CALLBACK_TOGGLE_ALT = "toggle_alt_"
-CALLBACK_TOGGLE_FORCE = "toggle_force_"
-CALLBACK_TOGGLE_PRIVDUMP = "toggle_privdump_"
-CALLBACK_SUBMIT_ACCEPTANCE = "submit_accept_"
-CALLBACK_CANCEL_REQUEST = "cancel_req_"
 
 
 # Message Templates
