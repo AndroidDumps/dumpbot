@@ -52,7 +52,7 @@ class QueuedMessage(BaseModel):
     max_retries: int = 3
     created_at: datetime
     scheduled_for: Optional[datetime] = None
-    context: Dict[str, Any] = {}
+    context: Dict[str, Any] = Field(default_factory=dict)
 
     def __init__(self, **data):
         if "message_id" not in data:
@@ -322,6 +322,7 @@ class MessageQueue:
     async def _consume_messages(self) -> None:
         """Main consumer loop that processes messages from Redis queues."""
         redis_client = await self._get_redis()
+        delayed_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
 
         # Priority order: URGENT -> HIGH -> NORMAL -> LOW
         priorities = [
@@ -338,6 +339,18 @@ class MessageQueue:
             try:
                 message_processed = False
 
+                due_messages = await redis_client.zrangebyscore(
+                    delayed_key,
+                    min=0,
+                    max=datetime.utcnow().timestamp(),
+                    start=0,
+                    num=1,
+                )
+                if due_messages:
+                    delayed_message_json = due_messages[0]
+                    if await redis_client.zrem(delayed_key, delayed_message_json):
+                        await self.publish(QueuedMessage.model_validate_json(delayed_message_json))
+
                 # Check each priority queue in order
                 for priority in priorities:
                     queue_key = self._make_queue_key(priority)
@@ -350,7 +363,6 @@ class MessageQueue:
 
                         if success:
                             message_processed = True
-                            last_message_time = datetime.utcnow()
 
                             # Implement basic rate limiting (30 messages/second max)
                             now = datetime.utcnow()
@@ -358,6 +370,7 @@ class MessageQueue:
                             if time_since_last < 0.033:  # ~30 messages/second
                                 rate_limit_delay = 0.033 - time_since_last
                                 await asyncio.sleep(rate_limit_delay)
+                            last_message_time = datetime.utcnow()
                         else:
                             # Re-queue failed message with incremented retry count
                             await self._handle_failed_message(message)
@@ -632,12 +645,23 @@ class MessageQueue:
         # Extract metadata from ARQ result if available
         result = arq_status.get("result", {})
         metadata = result.get("metadata", {})
+        telegram_context = metadata.get("telegram_context") or {}
+        url = telegram_context.get("url")
+
+        if not url:
+            return None
 
         # Build enhanced DumpJob with metadata
         job_data = {
             "job_id": job_id,
             "status": self._arq_status_to_job_status(arq_status["status"]),
-            "dump_args": {"url": metadata.get("telegram_context", {}).get("url", "")},
+            "dump_args": DumpArguments(
+                url=url,
+                use_alt_dumper=False,
+                use_privdump=False,
+                initial_message_id=telegram_context.get("message_id"),
+                initial_chat_id=telegram_context.get("chat_id"),
+            ).model_dump(),
             "add_blacklist": False,
             "created_at": arq_status.get("enqueue_time"),
             "started_at": metadata.get("start_time"),
@@ -646,11 +670,7 @@ class MessageQueue:
             "error_details": metadata.get("error_context", {}).get("message") if metadata.get("error_context") else None,
             "result_data": result,
             "progress": self._extract_current_progress(metadata),
-            # Add rich metadata fields
-            "device_info": metadata.get("device_info"),
-            "repository": metadata.get("repository"),
-            "telegram_context": metadata.get("telegram_context", {}),
-            "progress_history": metadata.get("progress_history", [])
+            "metadata": metadata,
         }
 
         return DumpJob.model_validate(job_data)
@@ -660,12 +680,14 @@ class MessageQueue:
         history = metadata.get("progress_history", [])
         if history:
             latest = history[-1]
-            return {
-                "current_step": latest.get("message", "Unknown"),
-                "percentage": latest.get("percentage", 0),
-                "details": latest,
-                "current_step_number": len(history)
-            }
+            return JobProgress(
+                current_step=latest.get("message", "Unknown"),
+                total_steps=latest.get("total_steps", 25),
+                current_step_number=latest.get("current_step_number", len(history)),
+                percentage=latest.get("percentage", 0.0),
+                details=str(latest),
+                error_message=latest.get("error_message"),
+            ).model_dump()
         return None
 
     async def get_active_jobs_with_metadata(self) -> List[DumpJob]:
