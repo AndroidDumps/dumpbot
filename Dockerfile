@@ -5,5 +5,6 @@ RUN python3 -m pip install python-telegram-bot[job-queue] backports.lzma protobu
 COPY run_arq_worker.py /usr/local/bin/
 COPY worker_settings.py /usr/local/bin/
 COPY dumpyarabot/ /app/dumpyarabot/
+ENV PYTHONPATH=/app
 WORKDIR /dumpyara
 ENTRYPOINT ["python3", "/usr/local/bin/run_arq_worker.py"]
