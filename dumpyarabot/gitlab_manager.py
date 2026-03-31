@@ -247,8 +247,8 @@ class GitLabManager:
         api_key: str
     ) -> None:
         """Send notification to Telegram channel."""
-        if is_whitelisted and not add_blacklist:
-            console.print("[blue]Skipping channel notification (whitelisted and not blacklisted)[/blue]")
+        if not (is_whitelisted and not add_blacklist):
+            console.print("[blue]Skipping channel notification (not whitelisted or blacklisted)[/blue]")
             return
 
         console.print("[blue]Sending channel notification...[/blue]")
