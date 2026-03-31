@@ -371,16 +371,8 @@ def format_file_size(size_bytes: int) -> str:
 
 async def check_tool_available(tool: str) -> bool:
     """Check if a command-line tool is available."""
-    try:
-        result = await run_command(
-            "which", tool,
-            capture_output=True,
-            timeout=5.0,
-            quiet=True,
-        )
-        return result.success
-    except Exception:
-        return False
+    import shutil
+    return shutil.which(tool) is not None
 
 
 async def find_files_in_directory(
@@ -390,10 +382,12 @@ async def find_files_in_directory(
     max_depth: Optional[int] = None,
 ) -> List[Path]:
     """Find files/directories using the find command."""
-    find_args = [".", "-type", file_type, "-name", pattern]
+    find_args = ["."]
 
     if max_depth is not None:
         find_args.extend(["-maxdepth", str(max_depth)])
+
+    find_args.extend(["-type", file_type, "-name", pattern])
 
     result = await run_command(
         "find", *find_args,
