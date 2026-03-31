@@ -66,7 +66,7 @@ class JobMetadata(BaseModel):
     """Metadata for ARQ job tracking and rich status displays."""
     job_type: str = "dump"
     telegram_context: Optional[Dict[str, Any]] = None  # chat_id, message_id, user_id, url
-    progress_history: List[Dict[str, Any]] = []  # List of progress updates
+    progress_history: List[Dict[str, Any]] = Field(default_factory=list)  # List of progress updates
     device_info: Optional[Dict[str, Any]] = None  # Populated after property extraction
     repository: Optional[Dict[str, Any]] = None  # Populated on successful completion
     error_context: Optional[Dict[str, Any]] = None  # Populated on failure
