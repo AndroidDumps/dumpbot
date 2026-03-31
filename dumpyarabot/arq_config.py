@@ -41,11 +41,11 @@ class WorkerSettings:
     # Redis connection (use same Redis as message queue)
     redis_settings = get_redis_settings()
 
-    # Job functions to register (import directly to avoid string resolution issues)
-    from dumpyarabot.arq_jobs import process_firmware_dump
-    functions = [
-        process_firmware_dump
-    ]
+    # Job functions registered lazily to avoid import-time failures
+    @classmethod
+    def get_functions(cls):
+        from dumpyarabot.arq_jobs import process_firmware_dump
+        return [process_firmware_dump]
 
     # Worker configuration
     queue_name = f"{settings.REDIS_KEY_PREFIX}arq_jobs"
