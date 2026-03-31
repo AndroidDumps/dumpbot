@@ -357,13 +357,13 @@ def format_build_summary_info(
     escaped_build_number = str(build_number)
 
     summary_parts = [
-        f"**Job:** `{escaped_job_name}`",
-        f"**Build:** `#{escaped_build_number}`",
-        f"**Result:** {result_emoji} {result or 'Unknown'}"
+        f"*Job:* `{escaped_job_name}`",
+        f"*Build:* `#{escaped_build_number}`",
+        f"*Result:* {result_emoji} {result or 'Unknown'}"
     ]
 
     if timestamp_str:
-        summary_parts.append(f"**Date:** {timestamp_str}")
+        summary_parts.append(f"*Date:* {timestamp_str}")
 
     return "\n".join(summary_parts)
 
@@ -439,13 +439,13 @@ def format_error_message(
     if job_id:
         message += f"🆔 *Job ID:* `{job_id}`\n\n"
 
-    message += f"**Details:** {error_details}\n"
+    message += f"*Details:* {error_details}\n"
 
     if context:
         for key, value in context.items():
             if key not in ["job_id"]:  # Avoid duplicating job_id
                 formatted_key = key.replace("_", " ").title()
-                message += f"**{formatted_key}:** `{value}`\n"
+                message += f"*{formatted_key}:* `{value}`\n"
 
     return message
 
@@ -522,7 +522,7 @@ def format_status_update_message(
 
 async def format_enhanced_job_status(job: "DumpJob") -> str:
     """Format detailed job status using ARQ metadata."""
-    metadata = job.result_data.get("metadata", {}) if job.result_data else {}
+    metadata = job.metadata.model_dump() if job.metadata else {}
 
     text = f" *Job Details: {escape_markdown(job.job_id)}*\n\n"
 
@@ -532,9 +532,9 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
         "failed": "",
         "running": "",
         "cancelled": "⏹"
-    }.get(job.status, "")
+    }.get(job.status.value, "")
 
-    text += f"{status_emoji} *Status:* {job.status.title()}\n"
+    text += f"{status_emoji} *Status:* {job.status.value.title()}\n"
 
     # Device info if available
     if metadata.get("device_info"):
@@ -550,9 +550,8 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
 
     # Progress info
     if job.progress:
-        progress = job.progress
-        text += f" *Progress:* {progress.get('percentage', 0):.1f}%\n"
-        text += f" *Current Step:* {progress.get('current_step', 'Unknown')}\n"
+        text += f" *Progress:* {job.progress.percentage:.1f}%\n"
+        text += f" *Current Step:* {job.progress.current_step}\n"
 
     # Error details
     if metadata.get("error_context"):
@@ -577,12 +576,11 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
     if active_jobs:
         text += f" *Active Jobs ({len(active_jobs)}):*\n"
         for job in active_jobs[:5]:  # Limit display
-            metadata = job.result_data.get("metadata", {}) if job.result_data else {}
+            metadata = job.metadata.model_dump() if job.metadata else {}
             url = metadata.get("telegram_context", {}).get("url", "Unknown URL")
 
-            progress = job.progress or {}
-            status = progress.get("current_step", "Initializing")
-            percentage = progress.get("percentage", 0)
+            status = job.progress.current_step if job.progress else "Initializing"
+            percentage = job.progress.percentage if job.progress else 0
 
             # Truncate URL for display
             short_url = url[:50] + "..." if len(url) > 50 else url
@@ -596,7 +594,7 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
     if recent_jobs:
         text += f" *Recent Jobs ({len(recent_jobs)}):*\n"
         for job in recent_jobs:
-            metadata = job.result_data.get("metadata", {}) if job.result_data else {}
+            metadata = job.metadata.model_dump() if job.metadata else {}
 
             device_name = "Unknown Device"
             if metadata.get("device_info"):
@@ -607,7 +605,7 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
                 "completed": "",
                 "failed": "",
                 "cancelled": ""
-            }.get(job.status, "")
+            }.get(job.status.value, "")
 
             # Calculate time ago
             end_time = job.completed_at or job.started_at
