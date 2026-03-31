@@ -139,22 +139,26 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
     """Send a failure notification using existing message queue - PRESERVING ALL TELEGRAM FEATURES."""
 
     try:
-        # Create progress data to show failure state (exact original logic)
+        # Recover last known progress from metadata history
+        metadata = job_data.get("metadata") or {}
+        progress_history = metadata.get("progress_history") or []
+        last_progress = progress_history[-1] if progress_history else {}
+        last_step = last_progress.get("message", "Unknown step")
+        last_pct = last_progress.get("percentage", 0.0)
+
         failure_progress = {
             "current_step": "Failed",
-            "total_steps": 10,
-            "current_step_number": 0,
-            "percentage": 0.0,
+            "total_steps": 25,
+            "current_step_number": len(progress_history),
+            "percentage": last_pct,
             "error_message": error_details
         }
 
-        # Format the failure message using the standard progress format
-        progress = job_data.get("progress") or {}
-        current_step = progress.get("current_step", "Unknown step")
         formatted_message = await format_comprehensive_progress_message(
             job_data,
-            f" Failed at: {current_step}",
-            failure_progress
+            f" Failed at: {last_step}",
+            failure_progress,
+            metadata,
         )
 
         # PRESERVE: Check for required message context

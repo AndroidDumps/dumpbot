@@ -349,14 +349,22 @@ async def format_comprehensive_progress_message(
     # Enhanced error display (no duplication)
     if progress and progress.get("error_message") and metadata and metadata.get("error_context"):
         error_ctx = metadata["error_context"]
-        message += f"\n *Error:* {escape_markdown(error_ctx.get('message', 'Unknown error'))}\n"
-        message += f" *Failed at:* {error_ctx.get('current_step', 'Unknown step')}\n"
-
+        error_msg = error_ctx.get('message', 'Unknown error')
+        # Wrap in code block to avoid Markdown rendering issues with tracebacks
+        message += f"\n *Failed at:* {escape_markdown(error_ctx.get('current_step', 'Unknown step'))}\n"
         if error_ctx.get("last_successful_step"):
-            message += f" *Last successful:* {error_ctx['last_successful_step']}\n"
+            message += f" *Last successful:* {escape_markdown(error_ctx['last_successful_step'])}\n"
+        # Truncate error to fit within Telegram's 4096 char message limit
+        max_error_len = 4096 - len(message) - 30  # leave room for code block markers
+        if len(error_msg) > max_error_len:
+            error_msg = error_msg[:max_error_len] + "..."
+        message += f"\n *Error:*\n```\n{error_msg}\n```\n"
     elif progress and progress.get("error_message"):
         error_display = progress['error_message']
-        message += f" *Error:* {error_display}\n"
+        max_error_len = 4096 - len(message) - 30
+        if len(error_display) > max_error_len:
+            error_display = error_display[:max_error_len] + "..."
+        message += f"\n *Error:*\n```\n{error_display}\n```\n"
 
     return message
 
