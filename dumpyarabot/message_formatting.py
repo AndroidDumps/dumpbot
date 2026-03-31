@@ -268,7 +268,7 @@ async def format_comprehensive_progress_message(
 
     # Format basic info
     job_id_display = job_data["job_id"]
-    worker_id_display = job_data.get("worker_id", "arq_worker")
+    worker_id_display = job_data.get("worker_id") or "arq_worker"
 
     # Build message
     message = f"{status_emoji} *{status_text}*\n\n"

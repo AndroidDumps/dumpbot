@@ -276,7 +276,8 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
     })
 
     # Add ARQ job context to job_data for tracking
-    job_data["arq_job_id"] = getattr(ctx, 'job_id', None)
+    job_data["arq_job_id"] = ctx.get('job_id')
+    job_data["worker_id"] = f"arq@{job_data['arq_job_id'][:8]}" if job_data["arq_job_id"] else "arq_worker"
     job_data["_arq_ctx"] = ctx  # Store ctx for cancellation checks
 
     try:
@@ -408,6 +409,10 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 await update_progress_with_metadata(job_data, "Repository created successfully", 100.0)
 
+                # Remove non-serializable arq context before returning
+                # (arq re-serializes function args alongside the result)
+                job_data.pop("_arq_ctx", None)
+
                 return {
                     "success": True,
                     "repository_url": repo_url,
@@ -419,13 +424,17 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 console.print(f"[red]Error in inner processing for job {job_id}: {e}[/red]")
 
                 # Enhanced error handling
+                progress = job_data.get("progress") or {}
+                metadata = job_data.get("metadata") or {}
+                progress_history = metadata.get("progress_history") or []
+
                 job_data["metadata"].update({
                     "status": "failed",
                     "end_time": datetime.now(timezone.utc).isoformat(),
                     "error_context": {
                         "message": str(e),
-                        "current_step": job_data.get("progress", {}).get("current_step", "Unknown step"),
-                        "last_successful_step": job_data["metadata"]["progress_history"][-1]["message"] if job_data["metadata"]["progress_history"] else "None",
+                        "current_step": progress.get("current_step", "Unknown step"),
+                        "last_successful_step": progress_history[-1]["message"] if progress_history else "None",
                         "failure_time": datetime.now(timezone.utc).isoformat(),
                         "traceback": _sanitize_traceback(traceback.format_exc())
                     }
@@ -434,6 +443,10 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Send failure notification using existing message queue system
                 await _send_failure_notification(job_data, str(e))
 
+                # Remove non-serializable arq context before returning
+                # (arq re-serializes function args alongside the result)
+                job_data.pop("_arq_ctx", None)
+
                 return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
 
     except Exception as e:
@@ -441,13 +454,16 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
         console.print_exception()
 
         # Enhanced error handling for critical errors
+        metadata = job_data.get("metadata") or {}
+        progress_history = metadata.get("progress_history") or []
+
         job_data["metadata"].update({
             "status": "failed",
             "end_time": datetime.now(timezone.utc).isoformat(),
             "error_context": {
                 "message": f"Critical error: {str(e)}",
                 "current_step": "Critical failure",
-                "last_successful_step": job_data["metadata"]["progress_history"][-1]["message"] if job_data["metadata"]["progress_history"] else "None",
+                "last_successful_step": progress_history[-1]["message"] if progress_history else "None",
                 "failure_time": datetime.now(timezone.utc).isoformat(),
                 "traceback": _sanitize_traceback(traceback.format_exc())
             }
@@ -458,5 +474,9 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             await _send_failure_notification(job_data, f"Critical error: {str(e)}")
         except Exception as notification_error:
             console.print(f"[red]Failed to send failure notification: {notification_error}[/red]")
+
+        # Remove non-serializable arq context before returning
+        # (arq re-serializes function args alongside the result)
+        job_data.pop("_arq_ctx", None)
 
         return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
