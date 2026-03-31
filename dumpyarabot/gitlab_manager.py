@@ -26,7 +26,8 @@ class GitLabManager:
     async def create_and_push_repository(
         self,
         device_props: Dict[str, Any],
-        dumper_token: str
+        dumper_token: str,
+        force: bool = False,
     ) -> Tuple[str, str]:
         """Create GitLab repository and push firmware files."""
         repo_subgroup = device_props["repo_subgroup"]
@@ -44,14 +45,23 @@ class GitLabManager:
 
         # Check if branch already exists
         if await self._branch_exists(project_id, branch, dumper_token):
-            repo_url = f"https://{self.gitlab_server}/{self.org}/{repo_subgroup}/{repo_name}/tree/{branch}/"
-            raise Exception(f"Branch '{branch}' already exists in {repo_url}")
+            if not force:
+                repo_url = f"https://{self.gitlab_server}/{self.org}/{repo_subgroup}/{repo_name}/tree/{branch}/"
+                raise Exception(f"Branch '{branch}' already exists in {repo_url}")
+            console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
 
         # Setup git repository
         await self._setup_git_repository(branch, description)
 
         # Push to GitLab
-        repo_url = await self._push_to_gitlab(project_id, repo_subgroup, repo_name, branch, dumper_token)
+        repo_url = await self._push_to_gitlab(
+            project_id,
+            repo_subgroup,
+            repo_name,
+            branch,
+            dumper_token,
+            force=force,
+        )
 
         console.print(f"[green]Successfully created and pushed to: {repo_url}[/green]")
         return repo_url, f"{self.org}/{repo_subgroup}/{repo_name}"
@@ -198,7 +208,8 @@ class GitLabManager:
         repo_subgroup: str,
         repo_name: str,
         branch: str,
-        dumper_token: str
+        dumper_token: str,
+        force: bool = False,
     ) -> str:
         """Push git repository to GitLab."""
         console.print("[blue]Pushing to GitLab...[/blue]")
@@ -206,8 +217,13 @@ class GitLabManager:
         repo_url = f"{self.push_host}:{self.org}/{repo_subgroup}/{repo_name}.git"
         branch_ref = f"refs/heads/{branch}"
 
+        push_args = ["push"]
+        if force:
+            push_args.append("--force")
+        push_args.extend([repo_url, f"HEAD:{branch_ref}"])
+
         await run_git_command(
-            "push", repo_url, f"HEAD:{branch_ref}",
+            *push_args,
             cwd=self.work_dir,
             timeout=120.0,
             description="Pushing to GitLab"
