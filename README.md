@@ -71,13 +71,12 @@ Queue a new firmware dump job.
 Options:
 - `a` use the alternative dumper
 - `f` force a new dump even if one exists
-- `b` add the dump to the blacklist
 
 Examples:
 - `/dump https://example.com/firmware.zip`
 - `/dump https://example.com/firmware.zip a`
 - `/dump https://example.com/firmware.zip f`
-- `/dump https://example.com/firmware.zip afb`
+- `/dump https://example.com/firmware.zip af`
 
 ### `/cancel [job_id]`
 
