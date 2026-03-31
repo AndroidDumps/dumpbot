@@ -457,7 +457,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not context.args:
             await message_queue.send_reply(
                 chat_id=chat.id,
-                text="Usage: `/accept \\[request\\_id\\] \\[options\\]` or reply to a review message with `/accept \\[options\\]`\nOptions: a\\=alt, f\\=force, p\\=privdump",
+                text="Usage: `/accept [request_id] [options]` or reply to a review message with `/accept [options]`\nOptions: a=alt, f=force, p=privdump",
                 reply_to_message_id=message.message_id,
                 context={"command": "accept", "error": "missing_args"}
             )
@@ -611,7 +611,7 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not context.args:
             await message_queue.send_reply(
                 chat_id=chat.id,
-                text="Usage: `/reject \\[request\\_id\\] \\[reason\\]` or reply to a review message with `/reject \\[reason\\]`",
+                text="Usage: `/reject [request_id] [reason]` or reply to a review message with `/reject [reason]`",
                 reply_to_message_id=message.message_id,
                 context={"command": "reject", "error": "missing_args"}
             )

@@ -35,7 +35,7 @@ async def dump(
     # Ensure that we had some arguments passed
     if not context.args:
         console.print("[yellow]No arguments provided for dump command[/yellow]")
-        usage = "Usage: `/dump \\[URL\\] \\[a\\|f\\|p\\]`\nURL: required, a: alt dumper, f: force, p: use privdump"
+        usage = "Usage: `/dump [URL] [a|f|p]`\nURL: required, a: alt dumper, f: force, p: use privdump"
         await message_queue.send_reply(
             chat_id=chat.id,
             text=usage,
@@ -207,7 +207,7 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not context.args:
         console.print("[yellow]No job_id provided for cancel command[/yellow]")
         usage = (
-            "Usage: `/cancel \\[job\\_id\\] \\[p\\]`\njob\\_id: required, p: cancel privdump job"
+            "Usage: `/cancel [job_id] [p]`\njob\\_id: required, p: cancel privdump job"
         )
         await message_queue.send_reply(
             chat_id=chat.id,
@@ -321,14 +321,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     from dumpyarabot.config import USER_COMMANDS
     for cmd, desc in USER_COMMANDS:
         escaped_desc = escape_markdown(desc)
-        help_text += f"/{cmd} \\- {escaped_desc}\n"
+        help_text += f"/{cmd} - {escaped_desc}\n"
 
     # Internal commands
     help_text += "\n* Internal Commands:*\n"
     from dumpyarabot.config import INTERNAL_COMMANDS
     for cmd, desc in INTERNAL_COMMANDS:
         escaped_desc = escape_markdown(desc)
-        help_text += f"/{cmd} \\- {escaped_desc}\n"
+        help_text += f"/{cmd} - {escaped_desc}\n"
 
     # Admin commands (only show to admins)
     if is_admin:
@@ -336,16 +336,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         from dumpyarabot.config import ADMIN_COMMANDS
         for cmd, desc in ADMIN_COMMANDS:
             escaped_desc = escape_markdown(desc)
-            help_text += f"/{cmd} \\- {escaped_desc}\n"
+            help_text += f"/{cmd} - {escaped_desc}\n"
 
     help_text += "\n*Usage Examples:*\n"
-    help_text += "• `/dump https://example.com/firmware.zip` \\- Basic dump\n"
-    help_text += "• `/dump https://example.com/firmware.zip af` \\- Alt dumper \\+ force\n"
-    help_text += "• `/dump https://example.com/firmware.zip p` \\- Private dump\n"
+    help_text += "• `/dump https://example.com/firmware.zip` - Basic dump\n"
+    help_text += "• `/dump https://example.com/firmware.zip af` - Alt dumper + force\n"
+    help_text += "• `/dump https://example.com/firmware.zip p` - Private dump\n"
     help_text += "\n*Option Flags:*\n"
-    help_text += "• `a` \\- Use alternative dumper for rare firmware types unsupported by primary dumper\n"
-    help_text += "• `f` \\- Force re\\-dump (skip existing dump/branch check)\n"
-    help_text += "• `p` \\- Use private dump (Deletes message, processes in background, Firmware URL = Not visibile, Finished dump in Gitlab = Visible.)\n"
+    help_text += "• `a` - Use alternative dumper for rare firmware types unsupported by primary dumper\n"
+    help_text += "• `f` - Force re-dump (skip existing dump/branch check)\n"
+    help_text += "• `p` - Use private dump (Deletes message, processes in background, Firmware URL = Not visible, Finished dump in Gitlab = Visible.)\n"
 
     await message_queue.send_reply(
         chat_id=chat.id,
