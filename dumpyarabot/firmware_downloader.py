@@ -26,9 +26,6 @@ class FirmwareDownloader:
         """Download firmware and return (file_path, file_name)."""
         url = str(job.dump_args.url)
 
-        # Clean query strings from URL
-        url = url.split('?')[0]
-
         # Check if it's a local file
         if os.path.isfile(url):
             console.print(f"[green]Found local file: {url}[/green]")
@@ -51,9 +48,6 @@ class FirmwareDownloader:
 
     async def _optimize_url(self, url: str) -> str:
         """Optimize URL with best available mirrors."""
-        # Clean query strings first
-        url = url.split('?')[0]
-
         # Xiaomi mirror optimization
         if "d.miui.com" in url:
             return await self._optimize_xiaomi_url(url)
@@ -200,10 +194,9 @@ class FirmwareDownloader:
 
         console.print("[yellow]aria2c failed, trying wget...[/yellow]")
 
-        # Clean up any partial downloads
-        for file in self.work_dir.glob("*"):
-            if file.is_file():
-                safe_remove_file(file)
+        # Clean up aria2c partial download artifacts only
+        for file in self.work_dir.glob("*.aria2"):
+            safe_remove_file(file)
 
         # Try wget fallback
         result = await run_download_command(
