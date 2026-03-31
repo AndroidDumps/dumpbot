@@ -61,7 +61,7 @@ async def _create_status_message(
     else:
         initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{pending_review.url}`\n"
 
-    initial_text += f"ðŸ†” *Job ID:* `{job_id}`\n"
+    initial_text += f"*Job ID:* `{job_id}`\n"
 
     options_list = []
     if dump_args.use_alt_dumper:
@@ -75,7 +75,7 @@ async def _create_status_message(
 
     initial_text += f"\n{generate_progress_bar(None)}\n"
     initial_text += " Queued for processing...\n\n"
-    initial_text += "â± *Elapsed:* 0s\n"
+    initial_text += "*Elapsed:* 0s\n"
     initial_text += " *Worker:* Waiting for assignment...\n"
 
     status_message = await context.bot.send_message(

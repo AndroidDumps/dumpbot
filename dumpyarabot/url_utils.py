@@ -4,7 +4,10 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import AnyHttpUrl, ValidationError
+from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
+
+
+HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 
 
 async def validate_and_normalize_url(url_str: str) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -21,8 +24,7 @@ async def validate_and_normalize_url(url_str: str) -> Tuple[bool, Optional[str],
         - error_message: Error description if invalid, None otherwise
     """
     try:
-        # Use existing Pydantic validation
-        validated_url = AnyHttpUrl(url_str)
+        validated_url = HTTP_URL_ADAPTER.validate_python(url_str)
         return True, str(validated_url), None
     except ValidationError as e:
         return False, None, f"Invalid URL: {e}"

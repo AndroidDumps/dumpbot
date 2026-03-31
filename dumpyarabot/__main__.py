@@ -33,7 +33,7 @@ async def handle_post_restart_update(context):
                 text=f" *Restart Complete*\n\n"
                      f" *Requested by:* {restart_info['user_mention']}\n"
                      f" *Status:* Bot successfully restarted and is now online!\n\n"
-                     f"⏱ All operations are ready to resume.",
+                     f"All operations are ready to resume.",
                 edit_message_id=restart_info["message_id"],
                 parse_mode=settings.DEFAULT_PARSE_MODE,
                 context={"restart_completion": True}
