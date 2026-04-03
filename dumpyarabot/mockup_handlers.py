@@ -333,7 +333,7 @@ async def _handle_mockup_back(
             )
 
             await query.edit_message_text(
-                "⬅ Returned to Accept/Reject",
+                "Returned to Accept/Reject",
                 reply_markup=_create_compact_controls_keyboard(request_id),
             )
         elif mockup_state.current_menu == "completed":
@@ -352,7 +352,7 @@ async def _handle_mockup_back(
             )
 
             await query.edit_message_text(
-                "⬅ Returned to Options",
+                "Returned to Options",
                 reply_markup=_create_compact_controls_keyboard(request_id),
             )
         elif mockup_state.current_menu == "rejected":
@@ -377,7 +377,7 @@ async def _handle_mockup_back(
             )
 
             await query.edit_message_text(
-                "⬅ Returned to Accept/Reject",
+                "Returned to Accept/Reject",
                 reply_markup=_create_compact_controls_keyboard(request_id),
             )
         elif mockup_state.current_menu == "cancelled":
@@ -402,13 +402,13 @@ async def _handle_mockup_back(
             )
 
             await query.edit_message_text(
-                "⬅ Returned to Accept/Reject",
+                "Returned to Accept/Reject",
                 reply_markup=_create_compact_controls_keyboard(request_id),
             )
         else:
             # Already at initial state
             await query.edit_message_text(
-                "ℹ Already at initial state",
+                "Already at initial state",
                 reply_markup=_create_compact_controls_keyboard(request_id),
             )
 
@@ -518,7 +518,7 @@ def _create_compact_controls_keyboard(request_id: str) -> "InlineKeyboardMarkup"
                 " Reset", callback_data=f"{CALLBACK_MOCKUP_RESET}{request_id}"
             ),
             InlineKeyboardButton(
-                "⬅ Back", callback_data=f"{CALLBACK_MOCKUP_BACK}{request_id}"
+                "Back", callback_data=f"{CALLBACK_MOCKUP_BACK}{request_id}"
             ),
             InlineKeyboardButton(
                 " Delete", callback_data=f"{CALLBACK_MOCKUP_DELETE}{request_id}"
