@@ -11,6 +11,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from rich.console import Console
 
@@ -33,13 +34,63 @@ _SENSITIVE_PATTERNS = [
     re.compile(r'(token[=:]\s*)\S+', re.IGNORECASE),
     re.compile(r'(password[=:]\s*)\S+', re.IGNORECASE),
 ]
+_URL_PATTERN = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
 
 
 def _sanitize_traceback(tb_str: str) -> str:
     """Remove sensitive tokens and credentials from traceback strings."""
     for pattern in _SENSITIVE_PATTERNS:
         tb_str = pattern.sub(r'\1[REDACTED]', tb_str)
-    return tb_str
+    return _URL_PATTERN.sub(
+        lambda match: _sanitize_url_for_log(match.group(0).rstrip(".,;:!?)\"]}'")),
+        tb_str,
+    )
+
+
+def _sanitize_text(value: Any) -> str:
+    """Sanitize arbitrary log text."""
+    return _sanitize_traceback(str(value))
+
+
+def _derive_last_successful_step(progress_history: list[Dict[str, Any]], failed_step: Optional[str] = None) -> Optional[str]:
+    """Return the most recent successful step before a failed step, if known."""
+    if not progress_history:
+        return None
+
+    if failed_step:
+        for entry in reversed(progress_history):
+            message = entry.get("message")
+            if message and message != failed_step:
+                return message
+        return None
+
+    latest = progress_history[-1].get("message")
+    return latest if latest else None
+
+
+def _sanitize_url_for_log(url_value: Any) -> str:
+    """Redact credentials and query parameters from logged URLs."""
+    url = str(url_value or "unknown")
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+
+    try:
+        hostname = parts.hostname or ""
+        port = parts.port
+        username = parts.username
+    except ValueError:
+        return url
+
+    netloc = hostname
+    if port:
+        netloc = f"{netloc}:{port}"
+    if username:
+        netloc = f"[REDACTED]@{netloc}"
+
+    sanitized = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    return sanitized or url
 
 
 class PeriodicTimerUpdate:
@@ -135,6 +186,44 @@ async def _send_status_update(
         )
 
 
+def _build_failure_log_text(job_data: Dict[str, Any]) -> str:
+    """Assemble a plain-text failure log from job metadata."""
+    lines = ["=== DUMPYARABOT JOB FAILURE LOG ==="]
+
+    lines.append(f"Job ID:   {job_data.get('job_id', 'unknown')}")
+    lines.append(f"Worker:   {job_data.get('worker_id', 'unknown')}")
+    url = (job_data.get("dump_args") or {}).get("url", "unknown")
+    lines.append(f"URL:      {_sanitize_url_for_log(url)}")
+
+    metadata = job_data.get("metadata") or {}
+    lines.append(f"Started:  {metadata.get('start_time', 'unknown')}")
+    lines.append(f"Failed:   {metadata.get('end_time', 'unknown')}")
+
+    lines.append("\n=== PROGRESS HISTORY ===")
+    for entry in metadata.get("progress_history") or []:
+        ts = entry.get("timestamp", "")
+        msg = entry.get("message", "")
+        try:
+            pct_display = f"{float(entry.get('percentage', 0) or 0):.0f}%"
+        except (TypeError, ValueError):
+            pct_display = "?%"
+        lines.append(f"[{ts}] ({pct_display}) {_sanitize_text(msg)}")
+
+    error_ctx = metadata.get("error_context") or {}
+    if error_ctx:
+        lines.append("\n=== ERROR CONTEXT ===")
+        lines.append(f"Failed at:       {_sanitize_text(error_ctx.get('current_step', 'unknown'))}")
+        if error_ctx.get('last_successful_step'):
+            lines.append(f"Last successful: {_sanitize_text(error_ctx['last_successful_step'])}")
+        lines.append(f"Error message:   {_sanitize_text(error_ctx.get('message', 'unknown'))}")
+        tb = error_ctx.get("traceback")
+        if tb:
+            lines.append("\n=== TRACEBACK (sanitized) ===")
+            lines.append(_sanitize_traceback(tb))
+
+    return "\n".join(lines)
+
+
 async def _send_failure_notification(job_data: Dict[str, Any], error_details: str) -> None:
     """Send a failure notification using existing message queue - PRESERVING ALL TELEGRAM FEATURES."""
 
@@ -143,7 +232,8 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
         metadata = job_data.get("metadata") or {}
         progress_history = metadata.get("progress_history") or []
         last_progress = progress_history[-1] if progress_history else {}
-        last_step = last_progress.get("message", "Unknown step")
+        error_ctx = metadata.get("error_context") or {}
+        last_step = error_ctx.get("current_step") or last_progress.get("message", "Unknown step")
         last_pct = last_progress.get("percentage", 0.0)
 
         failure_progress = {
@@ -200,6 +290,22 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
             )
 
         console.print(f"[green]Sent failure notification for job {job_data.get('job_id', 'unknown')}[/green]")
+
+        # Send failure log as a text file for debugging
+        try:
+            log_text = _build_failure_log_text(job_data)
+            log_bytes = log_text.encode("utf-8")
+            job_id_short = str(job_data.get("job_id", "unknown"))[:8]
+            filename = f"dump_failure_{job_id_short}.txt"
+            target_chat = primary_allowed_chat if is_moderated_request and primary_allowed_chat is not None else chat_id
+            await message_queue.send_document(
+                chat_id=target_chat,
+                content=log_bytes,
+                filename=filename,
+                caption="Failure log",
+            )
+        except Exception as log_err:
+            console.print(f"[yellow]Could not queue failure log file: {log_err}[/yellow]")
 
     except Exception as e:
         console.print(f"[red]Failed to send failure notification: {e}[/red]")
@@ -458,8 +564,11 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "end_time": datetime.now(timezone.utc).isoformat(),
                     "error_context": {
                         "message": str(e),
-                        "current_step": progress.get("current_step", "Unknown step"),
-                        "last_successful_step": progress_history[-1]["message"] if progress_history else "None",
+                        "current_step": progress_history[-1].get("message", "Unknown step") if progress_history else "Unknown step",
+                        "last_successful_step": _derive_last_successful_step(
+                            progress_history,
+                            progress_history[-1].get("message") if progress_history else None,
+                        ),
                         "failure_time": datetime.now(timezone.utc).isoformat(),
                         "traceback": _sanitize_traceback(traceback.format_exc())
                     }
@@ -488,7 +597,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             "error_context": {
                 "message": f"Critical error: {str(e)}",
                 "current_step": "Critical failure",
-                "last_successful_step": progress_history[-1]["message"] if progress_history else "None",
+                "last_successful_step": _derive_last_successful_step(progress_history) or "None",
                 "failure_time": datetime.now(timezone.utc).isoformat(),
                 "traceback": _sanitize_traceback(traceback.format_exc())
             }
