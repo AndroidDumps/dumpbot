@@ -387,13 +387,6 @@ def format_build_summary_info(
     Returns:
         Formatted build summary
     """
-    # Format result with emoji
-    result_emoji = {
-        "SUCCESS": "",
-        "FAILURE": "",
-        "UNSTABLE": "",
-        "ABORTED": "⏹",
-    }.get(result, "")
 
     # Build summary parts
     escaped_job_name = escape_markdown(job_name)
@@ -402,7 +395,7 @@ def format_build_summary_info(
     summary_parts = [
         f"*Job:* `{escaped_job_name}`",
         f"*Build:* `#{escaped_build_number}`",
-        f"*Result:* {result_emoji} {result or 'Unknown'}"
+        f"*Result:* {result or 'Unknown'}"
     ]
 
     if timestamp_str:
@@ -682,3 +675,4 @@ def format_time_ago(timestamp) -> str:
         return f"{seconds // 3600}h ago"
     else:
         return f"{seconds // 86400}d ago"
+

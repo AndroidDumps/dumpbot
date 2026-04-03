@@ -103,7 +103,7 @@ async def dump(
         else:
             initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
 
-        initial_text += f"🆔 *Job ID:* `{job.job_id}`\n"
+        initial_text += f"*Job ID:* `{job.job_id}`\n"
 
         # Format options
         options_list = []
@@ -118,7 +118,7 @@ async def dump(
 
         initial_text += f"\n{generate_progress_bar(None)}\n"
         initial_text += " Queued for processing...\n\n"
-        initial_text += "⏱ *Elapsed:* 0s\n"
+        initial_text += "*Elapsed:* 0s\n"
         initial_text += " *Worker:* Waiting for assignment...\n"
 
         # Send initial message directly to get real Telegram message ID
@@ -231,17 +231,17 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if cancelled:
             escaped_job_id = escape_markdown(job_id)
-            response_message = f" *Job cancelled successfully*\n\n🆔 *Job ID:* `{escaped_job_id}`\n\nThe dump job has been removed from the queue or stopped if it was in progress."
+            response_message = f" *Job cancelled successfully*\n\n*Job ID:* `{escaped_job_id}`\n\nThe dump job has been removed from the queue or stopped if it was in progress."
             console.print(f"[green]Successfully cancelled job {job_id}[/green]")
         else:
             escaped_job_id = escape_markdown(job_id)
-            response_message = f" *Job not found*\n\n🆔 *Job ID:* `{escaped_job_id}`\n\nThe job was not found in the queue or may have already completed." 
+            response_message = f" *Job not found*\n\n*Job ID:* `{escaped_job_id}`\n\nThe job was not found in the queue or may have already completed." 
     except Exception as e:
         console.print(f"[red]Error processing cancel request: {e}[/red]")
         console.print_exception()
         escaped_job_id = escape_markdown(job_id)
         escaped_error = escape_markdown(str(e))
-        response_message = f" *Error cancelling job*\n\n🆔 *Job ID:* `{escaped_job_id}`\n\nError: {escaped_error}"
+        response_message = f" *Error cancelling job*\n\n*Job ID:* `{escaped_job_id}`\n\nError: {escaped_error}"
 
     await message_queue.send_reply(
         chat_id=chat.id,
@@ -407,7 +407,7 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• Reload configuration and code\n"
         "• Clear in-memory state\n"
         "• Restart with latest changes\n\n"
-        "⏱ *This confirmation will expire in 30 seconds*"
+        "*This confirmation will expire in 30 seconds*"
     )
 
     # Convert keyboard to dict for queue serialization
