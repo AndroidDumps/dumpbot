@@ -1,11 +1,12 @@
 import asyncio
+import base64
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, List
 
 import redis.asyncio as redis
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from telegram import Bot
 from telegram.error import RetryAfter, TelegramError, NetworkError
@@ -24,6 +25,7 @@ class MessageType(str, Enum):
     NOTIFICATION = "notification"
     CROSS_CHAT = "cross_chat"
     ERROR = "error"
+    DOCUMENT = "document"
 
 
 class MessagePriority(str, Enum):
@@ -40,8 +42,11 @@ class QueuedMessage(BaseModel):
     type: MessageType
     priority: MessagePriority
     chat_id: int
-    text: str
-    parse_mode: str
+    text: Optional[str] = None
+    parse_mode: Optional[str] = None
+    document_content_b64: Optional[str] = None
+    document_filename: Optional[str] = None
+    caption: Optional[str] = None
     reply_to_message_id: Optional[int] = None
     reply_parameters: Optional[Dict[str, Any]] = None
     edit_message_id: Optional[int] = None
@@ -62,6 +67,18 @@ class QueuedMessage(BaseModel):
         if "parse_mode" not in data or data.get("parse_mode") is None:
             data["parse_mode"] = settings.DEFAULT_PARSE_MODE
         super().__init__(**data)
+
+    @model_validator(mode="after")
+    def validate_type_specific_fields(self) -> "QueuedMessage":
+        """Enforce required fields for text and document message types."""
+        if self.type == MessageType.DOCUMENT:
+            if not self.document_content_b64 or not self.document_filename:
+                raise ValueError("document messages require document_content_b64 and document_filename")
+            return self
+
+        if not self.text:
+            raise ValueError(f"{self.type.value} messages require text")
+        return self
 
 
 # Rebuild the model to resolve any forward references
@@ -294,6 +311,26 @@ class MessageQueue:
         )
         return await self.publish_and_return_placeholder(message)
 
+    async def send_document(
+        self,
+        chat_id: int,
+        content: bytes,
+        filename: str,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = settings.DEFAULT_PARSE_MODE,
+    ) -> None:
+        """Queue a document for delivery."""
+        message = QueuedMessage(
+            type=MessageType.DOCUMENT,
+            priority=MessagePriority.URGENT,
+            chat_id=chat_id,
+            document_content_b64=base64.b64encode(content).decode("ascii"),
+            document_filename=filename,
+            caption=caption,
+            parse_mode=parse_mode,
+        )
+        await self.publish(message)
+
     def set_bot(self, bot: Bot) -> None:
         """Set the Telegram bot instance."""
         self._bot = bot
@@ -397,6 +434,26 @@ class MessageQueue:
         try:
             parse_mode_info = f" with parse_mode={message.parse_mode}" if message.parse_mode else " with NO parse_mode"
             console.print(f"[blue]Processing {message.type.value} message for chat {message.chat_id}{parse_mode_info}[/blue]")
+
+            if message.type == MessageType.DOCUMENT:
+                import io
+                from telegram import InputFile
+
+                if not message.document_content_b64 or not message.document_filename:
+                    console.print("[red]Document message missing content or filename; dropping malformed message without retry[/red]")
+                    return True
+
+                await self._bot.send_document(
+                    chat_id=message.chat_id,
+                    document=InputFile(
+                        io.BytesIO(base64.b64decode(message.document_content_b64)),
+                        filename=message.document_filename,
+                    ),
+                    caption=message.caption,
+                    parse_mode=message.parse_mode,
+                )
+                console.print(f"[green]Successfully processed {message.type.value} message[/green]")
+                return True
 
             # Prepare common parameters
             kwargs = {
