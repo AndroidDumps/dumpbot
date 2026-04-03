@@ -167,7 +167,14 @@ class FirmwareExtractor:
 
     async def process_boot_images(self) -> None:
         """Process boot images (boot.img, vendor_boot.img, etc.)."""
-        boot_images = ["init_boot.img", "vendor_kernel_boot.img", "vendor_boot.img", "boot.img", "dtbo.img"]
+        boot_images = [
+            "init_boot.img",
+            "vendor_kernel_boot.img",
+            "vendor_boot.img",
+            "boot.img",
+            "recovery.img",
+            "dtbo.img",
+        ]
 
         # Move boot images to work directory root if they're in subdirectories
         for image_name in boot_images:
@@ -193,6 +200,8 @@ class FirmwareExtractor:
 
         if image_name == "boot.img":
             await self._process_boot_img(image_path, output_dir)
+        elif image_name == "recovery.img":
+            await self._process_recovery_img(image_path, output_dir)
         elif image_name in ["vendor_boot.img", "vendor_kernel_boot.img", "init_boot.img"]:
             await self._process_vendor_boot_img(image_path, output_dir)
         elif image_name == "dtbo.img":
@@ -227,6 +236,15 @@ class FirmwareExtractor:
             await self._unpack_boot_image(image_path, output_dir)
 
         # Extract device tree blobs
+        await self._extract_device_trees(image_path, output_dir)
+
+    async def _process_recovery_img(self, image_path: Path, output_dir: Path):
+        """Process recovery.img by unpacking the image and extracting its ramdisk."""
+        output_dir.mkdir(exist_ok=True)
+
+        if self.firmware_extractor_path.exists():
+            await self._unpack_boot_image(image_path, output_dir)
+
         await self._extract_device_trees(image_path, output_dir)
 
     async def _process_dtbo_img(self, image_path: Path, output_dir: Path):
@@ -447,4 +465,3 @@ class FirmwareExtractor:
                     console.print(f"[green]Extracted {img_file.name}[/green]")
                 else:
                     console.print(f"[yellow]Failed to extract {img_file.name}[/yellow]")
-
