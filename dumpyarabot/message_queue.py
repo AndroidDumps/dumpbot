@@ -13,7 +13,7 @@ from telegram.error import RetryAfter, TelegramError, NetworkError, BadRequest
 import telegram
 
 from dumpyarabot.config import settings
-from dumpyarabot.schemas import DumpArguments, DumpJob, JobProgress, JobStatus
+from dumpyarabot.schemas import DumpArguments, DumpJob, JobCancelResult, JobProgress, JobStatus
 
 console = Console()
 
@@ -92,6 +92,7 @@ class MessageQueue:
         self._consumer_task: Optional[asyncio.Task] = None
         self._running = False
         self._bot: Optional[Bot] = None
+        self._owns_bot = False
         self._last_edit_times: Dict[str, datetime] = {}  # Track edit times by message_id
 
     async def _get_redis(self) -> redis.Redis:
@@ -103,6 +104,38 @@ class MessageQueue:
     def _make_queue_key(self, priority: MessagePriority) -> str:
         """Create Redis key for priority queue."""
         return f"{settings.REDIS_KEY_PREFIX}msg_queue:{priority.value}"
+
+    def _make_status_text_key(self, job_id: str) -> str:
+        """Create Redis key for the latest rendered Telegram status text."""
+        return f"{settings.REDIS_KEY_PREFIX}job_status_text:{job_id}"
+
+    async def store_latest_status_text(self, job_id: str, text: str, ttl_seconds: int = 15 * 24 * 3600) -> None:
+        """Persist the latest rendered status text so retries can preserve display state."""
+        redis_client = await self._get_redis()
+        await redis_client.set(self._make_status_text_key(job_id), text, ex=ttl_seconds)
+
+    async def get_latest_status_text(self, job_id: str) -> Optional[str]:
+        """Fetch the latest rendered status text for a job."""
+        redis_client = await self._get_redis()
+        value = await redis_client.get(self._make_status_text_key(job_id))
+        return str(value) if value is not None else None
+
+    async def _ensure_bot(self) -> Bot:
+        """Return a usable Telegram bot instance, creating one if needed."""
+        if self._bot:
+            return self._bot
+
+        bot_kwargs = {"token": settings.TELEGRAM_BOT_TOKEN}
+        if settings.TELEGRAM_API_BASE_URL:
+            base = settings.TELEGRAM_API_BASE_URL.rstrip("/")
+            bot_kwargs["base_url"] = f"{base}/bot"
+            bot_kwargs["base_file_url"] = f"{base}/file/bot"
+
+        bot = Bot(**bot_kwargs)
+        await bot.initialize()
+        self._bot = bot
+        self._owns_bot = True
+        return bot
 
     async def publish(self, message: QueuedMessage) -> str:
         """Publish a message to the appropriate priority queue and return message_id."""
@@ -266,12 +299,11 @@ class MessageQueue:
         Raises:
             Exception: If bot is not initialized
         """
-        if not self._bot:
-            raise Exception("Bot not initialized - cannot send immediate message")
+        bot = await self._ensure_bot()
 
         console.print(f"[blue]Sending immediate message to chat {chat_id} with parse_mode={parse_mode}[/blue]")
 
-        message = await self._bot.send_message(
+        message = await bot.send_message(
             chat_id=chat_id,
             text=text,
             parse_mode=parse_mode,
@@ -334,6 +366,7 @@ class MessageQueue:
     def set_bot(self, bot: Bot) -> None:
         """Set the Telegram bot instance."""
         self._bot = bot
+        self._owns_bot = False
 
     async def start_consumer(self) -> None:
         """Start the message consumer background task."""
@@ -703,18 +736,58 @@ class MessageQueue:
         }
         return status_mapping.get(arq_status, JobStatus.FAILED)
 
-    async def cancel_job(self, job_id: str) -> bool:
+    async def cancel_job(self, job_id: str) -> JobCancelResult:
         """Cancel an ARQ job."""
         from dumpyarabot.arq_config import arq_pool
 
-        success = await arq_pool.cancel_job(job_id)
+        result = await arq_pool.cancel_job(job_id)
+        color = "green" if result == JobCancelResult.CANCELLED else "yellow"
+        console.print(f"[{color}]Cancel job {job_id}: {result.value}[/{color}]")
+        return result
 
-        if success:
-            console.print(f"[green]Cancelled ARQ job {job_id}[/green]")
-        else:
-            console.print(f"[yellow]Could not cancel ARQ job {job_id}[/yellow]")
+    async def verify_telegram_context(self, job_data: Dict[str, Any]) -> None:
+        """Probe Telegram to confirm the bot can still reach the job's initial message.
 
-        return success
+        Does a direct (non-queued) edit of the initial message to validate access.
+        Raises RuntimeError for non-retryable failures (bot blocked, message/chat gone)
+        so the caller can abort the job before doing any heavy work.
+        """
+        from telegram.error import Forbidden, BadRequest
+
+        try:
+            bot = await self._ensure_bot()
+        except Exception as e:
+            raise RuntimeError(f"Telegram bot initialization failed: {e}") from e
+
+        initial_message_id = job_data.get("initial_message_id")
+        initial_chat_id = job_data.get("initial_chat_id")
+        if not initial_message_id or not initial_chat_id:
+            return  # privdump or missing context; allow job to proceed
+
+        # Prefer the latest rendered status text so retries do not rewind the
+        # Telegram message back to its original queued state.
+        job_id = str(job_data.get("job_id", ""))
+        probe_text = await self.get_latest_status_text(job_id)
+        if not probe_text:
+            probe_text = job_data.get("_queued_text", f"\u23f3 Job `{job_id}` starting...")
+
+        try:
+            await bot.edit_message_text(
+                chat_id=initial_chat_id,
+                message_id=initial_message_id,
+                text=probe_text,
+                parse_mode=settings.DEFAULT_PARSE_MODE,
+                disable_web_page_preview=True,
+            )
+        except Forbidden as e:
+            raise RuntimeError(f"Telegram context invalid (bot blocked/forbidden): {e}") from e
+        except BadRequest as e:
+            msg = str(e).lower()
+            if "message to edit not found" in msg or "chat not found" in msg or "message_id_invalid" in msg:
+                raise RuntimeError(f"Telegram context invalid (message/chat gone): {e}") from e
+            # "message is not modified" or parse errors are not evidence the chat is unreachable.
+        except TelegramError as e:
+            console.print(f"[yellow]Skipping Telegram context verification after transient API error: {e}[/yellow]")
 
     async def get_job_queue_stats(self) -> Dict[str, Any]:
         """Get ARQ queue statistics."""
