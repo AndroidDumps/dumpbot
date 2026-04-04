@@ -62,6 +62,7 @@ INTERNAL_COMMANDS = [
 
 ADMIN_COMMANDS = [
     ("restart", "Restart the bot"),
+    ("clearqueue", "Flush all queued (not yet running) jobs"),
 ]
 
 EMPTY_COMMANDS = []
