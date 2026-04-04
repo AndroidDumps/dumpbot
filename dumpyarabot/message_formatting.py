@@ -287,13 +287,10 @@ async def format_comprehensive_progress_message(
 
     # Determine status
     if progress and progress.get("percentage", 0) >= 100:
-        status_emoji = ""
         status_text = "Firmware Dump Completed"
     elif progress and progress.get("current_step") == "Failed":
-        status_emoji = ""
         status_text = "Firmware Dump Failed"
     else:
-        status_emoji = ""
         status_text = "Firmware Dump in Progress"
 
     # Format basic info
@@ -301,13 +298,13 @@ async def format_comprehensive_progress_message(
     worker_id_display = job_data.get("worker_id") or "arq_worker"
 
     # Build message
-    message = f"{status_emoji} *{status_text}*\n\n"
+    message = f" *{status_text}*\n\n"
     if job_data["dump_args"].get("use_privdump"):
         message += " *URL:* `[hidden for private dump]`\n"
     else:
         url_display = format_url_display(job_data["dump_args"]["url"])
         message += f" *URL:* `{url_display}`\n"
-    message += f"🆔 *Job ID:* `{job_id_display}`\n"
+    message += f"*Job ID:* `{job_id_display}`\n"
 
     # Format options
     options = format_dump_options(
@@ -473,7 +470,7 @@ def format_error_message(
     message = f" *{error_type}*\n\n"
 
     if job_id:
-        message += f"🆔 *Job ID:* `{job_id}`\n\n"
+        message += f"*Job ID:* `{job_id}`\n\n"
 
     message += f"*Details:* {error_details}\n"
 
@@ -532,18 +529,8 @@ def format_status_update_message(
     Returns:
         Formatted status message
     """
-    # Choose emoji based on status
-    status_emojis = {
-        "queued": "⏳",
-        "processing": "",
-        "completed": "",
-        "failed": "",
-        "cancelled": "⏹",
-    }
-
-    emoji = status_emojis.get(status.lower(), "ℹ")
-    message = f"{emoji} *Status: {status.title()}*\n\n"
-    message += f"🆔 *Job ID:* `{job_id}`\n"
+    message = f" *Status: {status.title()}*\n\n"
+    message += f"*Job ID:* `{job_id}`\n"
 
     if progress_percent is not None:
         progress_data = {"percentage": progress_percent, "current_step_number": 0, "total_steps": 10}
@@ -561,16 +548,7 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
     metadata = job.metadata.model_dump() if job.metadata else {}
 
     text = f" *Job Details: {escape_markdown(job.job_id)}*\n\n"
-
-    # Status with emoji
-    status_emoji = {
-        "completed": "",
-        "failed": "",
-        "running": "",
-        "cancelled": "⏹"
-    }.get(job.status.value, "")
-
-    text += f"{status_emoji} *Status:* {job.status.value.title()}\n"
+    text += f" *Status:* {job.status.value.title()}\n"
 
     # Device info if available
     if metadata.get("device_info"):
@@ -675,4 +653,5 @@ def format_time_ago(timestamp) -> str:
         return f"{seconds // 3600}h ago"
     else:
         return f"{seconds // 86400}d ago"
+
 
