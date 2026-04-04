@@ -9,7 +9,7 @@ import redis.asyncio as redis
 from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from telegram import Bot
-from telegram.error import RetryAfter, TelegramError, NetworkError
+from telegram.error import RetryAfter, TelegramError, NetworkError, BadRequest
 import telegram
 
 from dumpyarabot.config import settings
@@ -511,6 +511,15 @@ class MessageQueue:
             message.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
             await self._requeue_message(message)
             return True  # Don't increment retry count for rate limits
+
+        except BadRequest as e:
+            error_text = str(e)
+            if "message is not modified" in error_text.lower():
+                console.print("[yellow]Skipping no-op edit: message content is unchanged[/yellow]")
+                return True
+
+            console.print(f"[red]Telegram bad request processing message: {e}[/red]")
+            return False
 
         except NetworkError as e:
             console.print(f"[yellow]Network error processing message: {e}[/yellow]")
