@@ -11,6 +11,7 @@ from dumpyarabot.config import settings
 from dumpyarabot.auth import check_admin_permissions
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.message_formatting import generate_progress_bar
+from dumpyarabot.schemas import JobCancelResult
 
 console = Console()
 
@@ -134,6 +135,8 @@ async def dump(
 
         # Create enhanced job data with metadata structure
         enhanced_job_data = job.model_dump()
+        # Store initial text so the worker can re-edit it during Telegram context verification
+        enhanced_job_data["_queued_text"] = initial_text
         enhanced_job_data["metadata"] = {
             "telegram_context": {
                 "chat_id": chat.id,

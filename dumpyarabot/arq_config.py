@@ -4,15 +4,25 @@ This module provides ARQ configuration and connection pool management
 that integrates with the existing Redis configuration.
 """
 
+import json
+import os
+import signal as _signal
+import subprocess
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import arq
 from arq import ArqRedis
-from arq.constants import health_check_key_suffix, in_progress_key_prefix
+from arq.constants import (
+    health_check_key_suffix,
+    in_progress_key_prefix,
+    job_key_prefix,
+    retry_key_prefix,
+)
 from rich.console import Console
 
 from dumpyarabot.config import settings
+from dumpyarabot.schemas import JobCancelResult
 
 console = Console()
 
@@ -51,7 +61,7 @@ class WorkerSettings:
     queue_name = f"{settings.REDIS_KEY_PREFIX}arq_jobs"
     job_timeout = 7200  # 2 hours max per job
     keep_result = 3600  # Keep job results for 1 hour (will be overridden by result_ttl)
-    max_jobs = 1  # Process one job at a time per worker
+    max_jobs = settings.ARQ_MAX_JOBS
 
     # Retry configuration
     max_tries = 3
@@ -159,27 +169,249 @@ class ARQPool:
             console.print(f"[yellow]Could not get job status for {job_id}: {e}[/yellow]")
             return None
 
-    async def cancel_job(self, job_id: str) -> bool:
-        """Cancel an ARQ job."""
+    def _make_job_key(self, prefix: Any, job_id: str) -> Any:
+        """Build a Redis key from an ARQ key prefix."""
+        if isinstance(prefix, bytes):
+            return prefix + job_id.encode()
+        return f"{prefix}{job_id}"
+
+    def _make_running_job_key(self, job_id: str) -> str:
+        """Build the Redis key for per-job worker ownership metadata."""
+        return f"{settings.REDIS_KEY_PREFIX}running_job:{job_id}"
+
+    def _make_job_processes_key(self, job_id: str) -> str:
+        """Build the Redis key for subprocess PIDs associated with a job."""
+        return f"{settings.REDIS_KEY_PREFIX}job_processes:{job_id}"
+
+    def _make_cancel_requested_key(self, job_id: str) -> str:
+        """Build the Redis key for a cooperative cancellation request."""
+        return f"{settings.REDIS_KEY_PREFIX}cancel_requested:{job_id}"
+
+    async def register_running_job(self, job_id: str, worker_id: str, pid: int) -> None:
+        """Record which worker process currently owns a running job."""
+        pool = await self.get_pool()
+        payload = json.dumps({"worker_id": worker_id, "pid": pid})
+        await pool.set(self._make_running_job_key(job_id), payload, ex=WorkerSettings.job_timeout + 300)
+
+    async def get_running_job_owner(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch the worker ownership metadata for a running job."""
+        pool = await self.get_pool()
+        raw_value = await pool.get(self._make_running_job_key(job_id))
+        if not raw_value:
+            return None
+
+        try:
+            value = raw_value if isinstance(raw_value, str) else raw_value.decode()
+            owner = json.loads(value)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+        if not isinstance(owner, dict):
+            return None
+
+        return owner
+
+    async def clear_running_job(self, job_id: str) -> None:
+        """Remove the worker ownership metadata for a job."""
+        pool = await self.get_pool()
+        await pool.delete(self._make_running_job_key(job_id))
+
+    async def register_job_process(self, job_id: str, pid: int) -> None:
+        """Track a subprocess PID associated with a running job."""
+        pool = await self.get_pool()
+        key = self._make_job_processes_key(job_id)
+        await pool.sadd(key, str(pid))
+        await pool.expire(key, WorkerSettings.job_timeout + 300)
+
+    async def unregister_job_process(self, job_id: str, pid: int) -> None:
+        """Remove a subprocess PID association for a job."""
+        pool = await self.get_pool()
+        await pool.srem(self._make_job_processes_key(job_id), str(pid))
+
+    async def get_job_processes(self, job_id: str) -> List[int]:
+        """Get tracked subprocess PIDs for a job."""
+        pool = await self.get_pool()
+        raw_pids = await pool.smembers(self._make_job_processes_key(job_id))
+        pids: List[int] = []
+        for raw_pid in raw_pids:
+            try:
+                value = raw_pid if isinstance(raw_pid, str) else raw_pid.decode()
+                pids.append(int(value))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return pids
+
+    async def clear_job_processes(self, job_id: str) -> None:
+        """Remove tracked subprocess PIDs for a job."""
+        pool = await self.get_pool()
+        await pool.delete(self._make_job_processes_key(job_id))
+
+    async def request_job_cancel(self, job_id: str) -> None:
+        """Set a cooperative cancellation flag for a job."""
+        pool = await self.get_pool()
+        await pool.set(self._make_cancel_requested_key(job_id), "1", ex=WorkerSettings.job_timeout + 300)
+
+    async def is_job_cancel_requested(self, job_id: str) -> bool:
+        """Check whether a cooperative cancellation was requested for a job."""
+        pool = await self.get_pool()
+        return bool(await pool.exists(self._make_cancel_requested_key(job_id)))
+
+    async def clear_job_cancel_request(self, job_id: str) -> None:
+        """Clear the cooperative cancellation flag for a job."""
+        pool = await self.get_pool()
+        await pool.delete(self._make_cancel_requested_key(job_id))
+
+    async def cancel_job(self, job_id: str) -> JobCancelResult:
+        """Cancel an ARQ job without corrupting worker state."""
         pool = await self.get_pool()
 
         try:
             job = arq.jobs.Job(job_id, pool, _queue_name=WorkerSettings.queue_name)
             status = await job.status()
             if status == arq.jobs.JobStatus.not_found:
-                return False
+                return JobCancelResult.NOT_FOUND
 
-            success = await job.abort(timeout=5)
+            # Try soft abort (30s covers PeriodicTimerUpdate's sleep interval)
+            if await job.abort(timeout=30):
+                console.print(f"[green]Cleanly cancelled ARQ job {job_id}[/green]")
+                return JobCancelResult.CANCELLED
 
-            if success:
-                console.print(f"[green]Cancelled ARQ job {job_id}[/green]")
-            else:
-                console.print(f"[yellow]Could not cancel ARQ job {job_id}[/yellow]")
+            # Re-check status: job may have completed naturally during the 30s wait
+            if await job.status() == arq.jobs.JobStatus.not_found:
+                console.print(f"[blue]Job {job_id} completed during abort wait[/blue]")
+                return JobCancelResult.NOT_FOUND
 
-            return success
+            # Still running — escalate to force-kill
+            console.print(f"[yellow]Soft abort timed out for {job_id}, escalating to force-kill[/yellow]")
+            await self.request_job_cancel(job_id)
+            if await self.force_cancel_job(job_id):
+                return JobCancelResult.FORCE_KILLED
+
+            owner = await self.get_running_job_owner(job_id)
+            if owner and owner.get("pid") is not None:
+                try:
+                    os.kill(int(owner["pid"]), 0)
+                    console.print(
+                        f"[yellow]Worker for job {job_id} is still alive after abort timeout; "
+                        f"waiting for cooperative cancellation[/yellow]"
+                    )
+                    return JobCancelResult.CANCELLING
+                except ProcessLookupError:
+                    pass
+                except (TypeError, ValueError):
+                    pass
+
+            return JobCancelResult.TIMED_OUT
         except Exception as e:
             console.print(f"[red]Error cancelling job {job_id}: {e}[/red]")
-            return False
+            return JobCancelResult.FAILED
+
+    async def force_cancel_job(self, job_id: str) -> bool:
+        """Hard-kill a stuck in-progress job.
+
+        Uses per-job worker ownership metadata so multiple workers can coexist
+        without a global PID collision. If the worker is already gone, falls
+        back to clearing stale Redis state for that job only.
+
+        Returns True if any corrective action was taken.
+        """
+        pool = await self.get_pool()
+        owner = await self.get_running_job_owner(job_id)
+        child_pids = await self.get_job_processes(job_id)
+        acted = False
+        live_child_pids: List[int] = []
+
+        if child_pids:
+            for pid in child_pids:
+                try:
+                    self._terminate_process_tree(pid)
+                    console.print(f"[yellow]Terminated subprocess tree rooted at PID {pid} for job {job_id}[/yellow]")
+                    acted = True
+                except ProcessLookupError:
+                    console.print(f"[yellow]Subprocess PID {pid} for job {job_id} no longer running[/yellow]")
+                except OSError as e:
+                    console.print(f"[yellow]Could not signal subprocess PID {pid} for job {job_id}: {e}[/yellow]")
+                    live_child_pids.append(pid)
+
+        owner_alive = False
+        if owner and owner.get("pid") is not None:
+            try:
+                pid = int(owner["pid"])
+                os.kill(pid, 0)
+                owner_alive = True
+                if not acted:
+                    console.print(
+                        f"[yellow]No tracked child processes remained for job {job_id}; "
+                        f"waiting for cooperative cancellation on worker {owner.get('worker_id', 'unknown')}[/yellow]"
+                    )
+            except ProcessLookupError:
+                console.print(
+                    f"[yellow]Worker PID {owner.get('pid')!r} for job {job_id} no longer running; "
+                    f"clearing stale Redis state[/yellow]"
+                )
+                owner = None
+            except (TypeError, ValueError):
+                console.print(
+                    f"[yellow]Invalid worker PID in running-job metadata for {job_id}: "
+                    f"{owner.get('pid')!r}[/yellow]"
+                )
+                owner = None
+
+        # No live worker — delete the stale in-progress key so ARQ stops
+        # treating the job as running and the worker can pick up the next job.
+        ip_key = self._make_job_key(in_progress_key_prefix, job_id)
+        deleted = 0
+        if not owner_alive and not live_child_pids:
+            deleted = await pool.delete(ip_key)
+            await self.clear_running_job(job_id)
+            await self.clear_job_processes(job_id)
+        if deleted:
+            console.print(f"[yellow]Deleted stale in-progress key for job {job_id}[/yellow]")
+            return True
+
+        return acted
+
+    def _terminate_process_tree(self, pid: int) -> None:
+        """Terminate a subprocess tree rooted at the given PID."""
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+
+        os.killpg(os.getpgid(pid), _signal.SIGTERM)
+
+    async def clear_queued_jobs(self) -> list:
+        """Atomically remove queued jobs and clean their backing Redis keys."""
+        pool = await self.get_pool()
+        raw_job_ids = await pool.eval(
+            """
+            local job_ids = redis.call('ZRANGE', KEYS[1], 0, -1)
+            if #job_ids > 0 then
+                redis.call('DEL', KEYS[1])
+            end
+            return job_ids
+            """,
+            1,
+            WorkerSettings.queue_name,
+        )
+        job_ids = [
+            jid.decode() if isinstance(jid, bytes) else jid
+            for jid in raw_job_ids
+        ]
+        if job_ids:
+            cleanup_keys: List[Any] = []
+            for job_id in job_ids:
+                cleanup_keys.extend([
+                    self._make_job_key(job_key_prefix, job_id),
+                    self._make_job_key(retry_key_prefix, job_id),
+                ])
+            await pool.delete(*cleanup_keys)
+            console.print(f"[yellow]Cleared {len(job_ids)} queued job(s)[/yellow]")
+        return job_ids
 
     async def get_queue_stats(self) -> dict:
         """Get ARQ queue statistics."""

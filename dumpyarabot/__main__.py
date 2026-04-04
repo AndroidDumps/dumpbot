@@ -4,7 +4,7 @@ import sys
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
                           CommandHandler, MessageHandler, filters, JobQueue)
 
-from dumpyarabot.handlers import cancel_dump, dump, help_command, restart, status
+from dumpyarabot.handlers import cancel_dump, clear_queue, dump, help_command, restart, status
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.mockup_handlers import (handle_enhanced_callback_query,
                                          mockup_command)
@@ -136,6 +136,7 @@ if __name__ == "__main__":
     # Restart handler - now fully implemented
     restart_handler = CommandHandler("restart", restart)
 
+    clearqueue_handler = CommandHandler("clearqueue", clear_queue)
 
     # Add all handlers
     application.add_handler(dump_handler)
@@ -148,6 +149,7 @@ if __name__ == "__main__":
     application.add_handler(request_message_handler)
     application.add_handler(callback_handler)
     application.add_handler(restart_handler)
+    application.add_handler(clearqueue_handler)
 
     application.post_init = _startup_init
 
