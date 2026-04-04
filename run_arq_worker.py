@@ -48,6 +48,7 @@ class ARQWorkerManager:
                 keep_result=WorkerSettings.keep_result,
                 max_tries=WorkerSettings.max_tries,
                 health_check_interval=WorkerSettings.health_check_interval,
+                allow_abort_jobs=WorkerSettings.allow_abort_jobs,
                 queue_name=WorkerSettings.queue_name
             )
 

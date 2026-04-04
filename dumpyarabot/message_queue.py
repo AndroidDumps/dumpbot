@@ -451,6 +451,8 @@ class MessageQueue:
                     ),
                     caption=message.caption,
                     parse_mode=message.parse_mode,
+                    read_timeout=settings.TELEGRAM_DOCUMENT_READ_TIMEOUT,
+                    write_timeout=settings.TELEGRAM_DOCUMENT_WRITE_TIMEOUT,
                 )
                 console.print(f"[green]Successfully processed {message.type.value} message[/green]")
                 return True
@@ -512,11 +514,22 @@ class MessageQueue:
 
         except NetworkError as e:
             console.print(f"[yellow]Network error processing message: {e}[/yellow]")
-            # Simple retry with exponential backoff for network issues
-            retry_delay = min(30 * (2 ** message.retry_count), 300)  # 30s, 60s, 120s, 240s, 300s max
-            message.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=retry_delay)
-            await self._requeue_message(message)
-            return True  # Don't increment retry count for network issues
+            message.retry_count += 1
+            if message.retry_count <= message.max_retries:
+                retry_delay = min(30 * (2 ** (message.retry_count - 1)), 300)
+                console.print(
+                    f"[yellow]Retrying message {message.message_id} after network error "
+                    f"(attempt {message.retry_count}/{message.max_retries}) in {retry_delay}s[/yellow]"
+                )
+                message.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=retry_delay)
+                await self._requeue_message(message)
+            else:
+                console.print(
+                    f"[red]Message {message.message_id} exceeded max retries after network errors, "
+                    f"moving to dead letter queue[/red]"
+                )
+                await self._move_to_dead_letter_queue(message)
+            return True
 
         except TelegramError as e:
             console.print(f"[red]Telegram API error processing message: {e}[/red]")

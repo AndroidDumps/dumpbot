@@ -58,6 +58,7 @@ class WorkerSettings:
 
     # Health check
     health_check_interval = 30
+    allow_abort_jobs = True
 
     # Logging
     log_results = True

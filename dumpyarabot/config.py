@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     # Telegram formatting configuration
     DEFAULT_PARSE_MODE: str = "Markdown"
+    TELEGRAM_DOCUMENT_READ_TIMEOUT: float = 120.0
+    TELEGRAM_DOCUMENT_WRITE_TIMEOUT: float = 120.0
 
     # Optional custom base URL for Telegram Bot API (e.g. nginx reverse proxy)
     # Default: https://api.telegram.org/bot
