@@ -461,6 +461,8 @@ class MessageQueue:
             kwargs = {
                 "chat_id": message.chat_id,
                 "text": message.text,
+                "read_timeout": settings.TELEGRAM_TEXT_READ_TIMEOUT,
+                "write_timeout": settings.TELEGRAM_TEXT_WRITE_TIMEOUT,
             }
 
             if message.parse_mode:

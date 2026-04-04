@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     # Telegram formatting configuration
     DEFAULT_PARSE_MODE: str = "Markdown"
+    TELEGRAM_TEXT_READ_TIMEOUT: float = 60.0
+    TELEGRAM_TEXT_WRITE_TIMEOUT: float = 60.0
     TELEGRAM_DOCUMENT_READ_TIMEOUT: float = 120.0
     TELEGRAM_DOCUMENT_WRITE_TIMEOUT: float = 120.0
 
