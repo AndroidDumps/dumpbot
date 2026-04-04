@@ -229,16 +229,36 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     console.print(f"  Requested by: {user.username} (ID: {user.id})")
 
     try:
-        # Try to cancel the job in the worker queue
-        cancelled = await message_queue.cancel_job(job_id)
-
-        if cancelled:
-            escaped_job_id = escape_markdown(job_id)
-            response_message = f" *Job cancelled successfully*\n\n*Job ID:* `{escaped_job_id}`\n\nThe dump job has been removed from the queue or stopped if it was in progress."
+        result = await message_queue.cancel_job(job_id)
+        eid = escape_markdown(job_id)
+        if result == JobCancelResult.CANCELLED:
+            response_message = f" *Job cancelled*\n\n`{eid}`\n\nCleanly aborted."
             console.print(f"[green]Successfully cancelled job {job_id}[/green]")
+        elif result == JobCancelResult.FORCE_KILLED:
+            response_message = (
+                f" *Job force-killed*\n\n`{eid}`\n\n"
+                f"Job did not respond to soft abort within 30s. "
+                f"Terminated the job's tracked subprocesses and cleared its running state."
+            )
+            console.print(f"[yellow]Force-killed job {job_id}[/yellow]")
+        elif result == JobCancelResult.CANCELLING:
+            response_message = (
+                f" *Cancellation requested*\n\n`{eid}`\n\n"
+                f"The worker is still alive and the cooperative cancel flag is set. "
+                f"The job should stop at its next cancellation checkpoint."
+            )
+            console.print(f"[yellow]Cooperative cancellation pending for job {job_id}[/yellow]")
+        elif result == JobCancelResult.TIMED_OUT:
+            response_message = (
+                f" *Cancel timed out*\n\n`{eid}`\n\n"
+                f"The worker did not respond within 30s and no worker PID was found. "
+                f"The job will be killed when it hits its 2h timeout."
+            )
+            console.print(f"[yellow]Cancellation timed out for job {job_id}[/yellow]")
+        elif result == JobCancelResult.NOT_FOUND:
+            response_message = f" *Job not found*\n\n`{eid}`\n\nMay have already completed."
         else:
-            escaped_job_id = escape_markdown(job_id)
-            response_message = f" *Job not found*\n\n*Job ID:* `{escaped_job_id}`\n\nThe job was not found in the queue or may have already completed." 
+            response_message = f" *Could not cancel*\n\n`{eid}`\n\nJob exists but could not be stopped."
     except Exception as e:
         console.print(f"[red]Error processing cancel request: {e}[/red]")
         console.print_exception()
@@ -283,9 +303,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             # Active and recent jobs overview
             active_jobs = await message_queue.get_active_jobs_with_metadata()
             recent_jobs = await message_queue.get_recent_jobs_with_metadata(limit=8)
+            queue_stats = await message_queue.get_queue_stats()
+            dlq_count = queue_stats.get("dead_letter", 0)
 
             from dumpyarabot.message_formatting import format_jobs_overview
-            status_text = await format_jobs_overview(active_jobs, recent_jobs)
+            status_text = await format_jobs_overview(active_jobs, recent_jobs, dlq_count=dlq_count)
 
     except Exception as e:
         console.print(f"[red]Error getting status: {e}[/red]")
@@ -434,6 +456,51 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context={"command": "restart", "user_id": user.id, "confirmation": True}
     )
     await message_queue.publish(restart_message)
+
+
+async def clear_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler for the /clearqueue command — flushes all pending (not yet started) jobs."""
+    chat = update.effective_chat
+    message = update.effective_message
+    user = update.effective_user
+
+    if not chat or not message or not user:
+        return
+
+    if chat.id not in settings.ALLOWED_CHATS:
+        return
+
+    has_permission, _ = await check_admin_permissions(update, context, require_admin=True)
+    if not has_permission:
+        await message_queue.send_error(
+            chat_id=chat.id,
+            text="You don't have permission to use this command",
+            context={"command": "clearqueue", "user_id": user.id, "error": "permission_denied"}
+        )
+        return
+
+    try:
+        from dumpyarabot.arq_config import arq_pool
+        removed_ids = await arq_pool.clear_queued_jobs()
+        if removed_ids:
+            display_limit = 20
+            shown_ids = removed_ids[:display_limit]
+            ids_display = ", ".join(f"`{escape_markdown(jid)}`" for jid in shown_ids)
+            response = f" *Cleared {len(removed_ids)} queued job(s)*\n\nRemoved: {ids_display}"
+            if len(removed_ids) > display_limit:
+                remaining = len(removed_ids) - display_limit
+                response += f"\n\n...and {remaining} more job(s)."
+        else:
+            response = " *No queued jobs to clear*"
+    except Exception as e:
+        response = f" *Error clearing queue:* {escape_markdown(str(e))}"
+
+    await message_queue.send_reply(
+        chat_id=chat.id,
+        text=response,
+        reply_to_message_id=message.message_id,
+        context={"command": "clearqueue"}
+    )
 
 
 async def handle_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
