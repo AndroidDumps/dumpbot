@@ -325,19 +325,6 @@ async def _validate_gitlab_access() -> None:
         raise Exception(f"Cannot access GitLab server: {e}")
 
 
-async def _check_cancellation(ctx) -> bool:
-    """Check if the current ARQ job has been aborted."""
-    try:
-        if asyncio.current_task().cancelled():
-            return True
-        # Check ARQ's abort flag if available
-        if hasattr(ctx, 'abort'):
-            return ctx.abort
-    except Exception:
-        pass
-    return False
-
-
 async def update_progress_with_metadata(
     job_data: Dict[str, Any],
     step: str,
@@ -345,11 +332,6 @@ async def update_progress_with_metadata(
     extra_info: Optional[Dict[str, Any]] = None
 ) -> None:
     """Helper function for progress updates with metadata tracking."""
-    # Check for cancellation at each progress update
-    ctx = job_data.get("_arq_ctx")
-    if ctx and await _check_cancellation(ctx):
-        raise asyncio.CancelledError("Job cancelled by user")
-
     metadata = job_data["metadata"]
 
     progress_update = {
@@ -386,10 +368,9 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
         "status": "running"
     })
 
-    # Add ARQ job context to job_data for tracking
+    # Add ARQ job metadata for tracking
     job_data["arq_job_id"] = ctx.get('job_id')
     job_data["worker_id"] = f"arq@{job_data['arq_job_id'][:8]}" if job_data["arq_job_id"] else "arq_worker"
-    job_data["_arq_ctx"] = ctx  # Store ctx for cancellation checks
 
     try:
         # Create temporary work directory
@@ -540,10 +521,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 await update_progress_with_metadata(job_data, "Repository created successfully", 100.0)
 
-                # Remove non-serializable arq context before returning
-                # (arq re-serializes function args alongside the result)
-                job_data.pop("_arq_ctx", None)
-
                 return {
                     "success": True,
                     "repository_url": repo_url,
@@ -577,10 +554,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Send failure notification using existing message queue system
                 await _send_failure_notification(job_data, str(e))
 
-                # Remove non-serializable arq context before returning
-                # (arq re-serializes function args alongside the result)
-                job_data.pop("_arq_ctx", None)
-
                 return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
 
     except Exception as e:
@@ -608,9 +581,5 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             await _send_failure_notification(job_data, f"Critical error: {str(e)}")
         except Exception as notification_error:
             console.print(f"[red]Failed to send failure notification: {notification_error}[/red]")
-
-        # Remove non-serializable arq context before returning
-        # (arq re-serializes function args alongside the result)
-        job_data.pop("_arq_ctx", None)
 
         return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
