@@ -585,7 +585,7 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
 
             # Truncate URL for display
             short_url = url[:50] + "..." if len(url) > 50 else url
-            text += f"• `{job.job_id[:8]}` - {escape_markdown(short_url)}\n"
+            text += f"• `{job.job_id}` - {escape_markdown(short_url)}\n"
             text += f"  └─ {status} ({percentage:.1f}%)\n"
         text += "\n"
     else:
@@ -612,7 +612,7 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
             end_time = job.completed_at or job.started_at
             time_ago = format_time_ago(end_time) if end_time else "Unknown"
 
-            text += f"• {status_emoji} `{job.job_id[:8]}` - {escape_markdown(device_name)} ({time_ago})\n"
+            text += f"• {status_emoji} `{job.job_id}` - {escape_markdown(device_name)} ({time_ago})\n"
 
     return text
 
@@ -640,4 +640,5 @@ def format_time_ago(timestamp) -> str:
         return f"{seconds // 3600}h ago"
     else:
         return f"{seconds // 86400}d ago"
+
 
