@@ -23,49 +23,6 @@ class GitLabManager:
         self.org = "dumps"
         self.parent_group_id = 64
 
-    async def create_and_push_repository(
-        self,
-        device_props: Dict[str, Any],
-        dumper_token: str,
-        force: bool = False,
-    ) -> Tuple[str, str]:
-        """Create GitLab repository and push firmware files."""
-        repo_subgroup = device_props["repo_subgroup"]
-        repo_name = device_props["repo_name"]
-        branch = device_props["branch"]
-        description = device_props["description"]
-
-        console.print(f"[blue]Creating GitLab repository: {self.org}/{repo_subgroup}/{repo_name}[/blue]")
-
-        # Ensure subgroup exists
-        group_id = await self._ensure_subgroup_exists(repo_subgroup, dumper_token)
-
-        # Ensure project exists
-        project_id = await self._ensure_project_exists(group_id, repo_name, dumper_token, repo_subgroup)
-
-        # Check if branch already exists
-        if await self._branch_exists(project_id, branch, dumper_token):
-            if not force:
-                repo_url = f"https://{self.gitlab_server}/{self.org}/{repo_subgroup}/{repo_name}/tree/{branch}/"
-                raise Exception(f"Branch '{branch}' already exists in {repo_url}")
-            console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
-
-        # Setup git repository
-        await self._setup_git_repository(branch, description)
-
-        # Push to GitLab
-        repo_url = await self._push_to_gitlab(
-            project_id,
-            repo_subgroup,
-            repo_name,
-            branch,
-            dumper_token,
-            force=force,
-        )
-
-        console.print(f"[green]Successfully created and pushed to: {repo_url}[/green]")
-        return repo_url, f"{self.org}/{repo_subgroup}/{repo_name}"
-
     async def _ensure_subgroup_exists(self, subgroup_name: str, dumper_token: str) -> int:
         """Ensure GitLab subgroup exists, create if necessary."""
         console.print(f"[blue]Checking subgroup: {subgroup_name}[/blue]")
@@ -202,6 +159,23 @@ class GitLabManager:
 
         console.print("[green]Git repository setup completed[/green]")
 
+    async def _set_default_branch(self, project_id: int, branch: str, dumper_token: str) -> None:
+        """Set the default branch for the project."""
+        console.print(f"[blue]Setting default branch to: {branch}[/blue]")
+
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"https://{self.gitlab_server}/api/v4/projects/{project_id}",
+                headers={"Authorization": f"Bearer {dumper_token}"},
+                data={"default_branch": branch},
+                timeout=30.0
+            )
+
+            if response.status_code == 200:
+                console.print(f"[green]Set default branch to: {branch}[/green]")
+            else:
+                console.print(f"[yellow]Failed to set default branch: {response.text}[/yellow]")
+
     async def _push_to_gitlab(
         self,
         project_id: int,
@@ -236,22 +210,48 @@ class GitLabManager:
         repo_url = f"https://{self.gitlab_server}/{self.org}/{repo_subgroup}/{repo_name}/tree/{branch}/"
         return repo_url
 
-    async def _set_default_branch(self, project_id: int, branch: str, dumper_token: str) -> None:
-        """Set the default branch for the project."""
-        console.print(f"[blue]Setting default branch to: {branch}[/blue]")
+    async def create_and_push_repository(
+        self,
+        device_props: Dict[str, Any],
+        dumper_token: str,
+        force: bool = False,
+    ) -> Tuple[str, str]:
+        """Create GitLab repository and push firmware files."""
+        repo_subgroup = device_props["repo_subgroup"]
+        repo_name = device_props["repo_name"]
+        branch = device_props["branch"]
+        description = device_props["description"]
 
-        async with httpx.AsyncClient() as client:
-            response = await client.put(
-                f"https://{self.gitlab_server}/api/v4/projects/{project_id}",
-                headers={"Authorization": f"Bearer {dumper_token}"},
-                data={"default_branch": branch},
-                timeout=30.0
-            )
+        console.print(f"[blue]Creating GitLab repository: {self.org}/{repo_subgroup}/{repo_name}[/blue]")
 
-            if response.status_code == 200:
-                console.print(f"[green]Set default branch to: {branch}[/green]")
-            else:
-                console.print(f"[yellow]Failed to set default branch: {response.text}[/yellow]")
+        # Ensure subgroup exists
+        group_id = await self._ensure_subgroup_exists(repo_subgroup, dumper_token)
+
+        # Ensure project exists
+        project_id = await self._ensure_project_exists(group_id, repo_name, dumper_token, repo_subgroup)
+
+        # Check if branch already exists
+        if await self._branch_exists(project_id, branch, dumper_token):
+            if not force:
+                repo_url = f"https://{self.gitlab_server}/{self.org}/{repo_subgroup}/{repo_name}/tree/{branch}/"
+                raise Exception(f"Branch '{branch}' already exists in {repo_url}")
+            console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
+
+        # Setup git repository
+        await self._setup_git_repository(branch, description)
+
+        # Push to GitLab
+        repo_url = await self._push_to_gitlab(
+            project_id,
+            repo_subgroup,
+            repo_name,
+            branch,
+            dumper_token,
+            force=force,
+        )
+
+        console.print(f"[green]Successfully created and pushed to: {repo_url}[/green]")
+        return repo_url, f"{self.org}/{repo_subgroup}/{repo_name}"
 
     async def send_channel_notification(
         self,

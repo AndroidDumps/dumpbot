@@ -87,6 +87,12 @@ QueuedMessage.model_rebuild()
 class MessageQueue:
     """Redis-based message queue for unified Telegram messaging."""
 
+    class MessagePlaceholder:
+        """Placeholder object that mimics a Telegram Message for compatibility."""
+        def __init__(self, message_id: str, chat_id: int):
+            self.message_id = message_id
+            self.chat = type('Chat', (), {'id': chat_id})()
+
     def __init__(self):
         self._redis: Optional[redis.Redis] = None
         self._consumer_task: Optional[asyncio.Task] = None
@@ -227,12 +233,6 @@ class MessageQueue:
         )
         await self.publish(message)
 
-    class MessagePlaceholder:
-        """Placeholder object that mimics a Telegram Message for compatibility."""
-        def __init__(self, message_id: str, chat_id: int):
-            self.message_id = message_id
-            self.chat = type('Chat', (), {'id': chat_id})()
-
     async def publish_and_return_placeholder(
         self,
         message: QueuedMessage
@@ -335,95 +335,36 @@ class MessageQueue:
         """Set the Telegram bot instance."""
         self._bot = bot
 
-    async def start_consumer(self) -> None:
-        """Start the message consumer background task."""
-        if self._consumer_task and not self._consumer_task.done():
-            console.print("[yellow]Message consumer is already running[/yellow]")
-            return
+    async def _requeue_message(self, message: QueuedMessage) -> None:
+        """Re-queue a message, potentially with a delay."""
+        if message.scheduled_for and message.scheduled_for > datetime.now(timezone.utc):
+            # Use Redis to schedule the message
+            redis_client = await self._get_redis()
+            delay_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
+            score = message.scheduled_for.timestamp()
+            await redis_client.zadd(delay_key, {message.model_dump_json(): score})
+        else:
+            # Re-queue immediately
+            await self.publish(message)
 
-        self._running = True
-        self._consumer_task = asyncio.create_task(self._consume_messages())
-        console.print("[green]Message queue consumer started[/green]")
-
-    async def stop_consumer(self) -> None:
-        """Stop the message consumer."""
-        self._running = False
-        if self._consumer_task:
-            self._consumer_task.cancel()
-            try:
-                await self._consumer_task
-            except asyncio.CancelledError:
-                pass
-        console.print("[yellow]Message queue consumer stopped[/yellow]")
-
-    async def _consume_messages(self) -> None:
-        """Main consumer loop that processes messages from Redis queues."""
+    async def _move_to_dead_letter_queue(self, message: QueuedMessage) -> None:
+        """Move a failed message to the dead letter queue for manual review."""
         redis_client = await self._get_redis()
-        delayed_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
+        dlq_key = f"{settings.REDIS_KEY_PREFIX}dead_letter_queue"
+        await redis_client.lpush(dlq_key, message.model_dump_json())
 
-        # Priority order: URGENT -> HIGH -> NORMAL -> LOW
-        priorities = [
-            MessagePriority.URGENT,
-            MessagePriority.HIGH,
-            MessagePriority.NORMAL,
-            MessagePriority.LOW
-        ]
+        # Log DLQ size for monitoring
+        dlq_size = await redis_client.llen(dlq_key)
+        console.print(f"[red]Dead letter queue now has {dlq_size} message(s) - check with /status[/red]")
 
-        last_message_time = datetime.now(timezone.utc)
-        rate_limit_delay = 0
-
-        while self._running:
-            try:
-                message_processed = False
-
-                due_messages = await redis_client.zrangebyscore(
-                    delayed_key,
-                    min=0,
-                    max=datetime.now(timezone.utc).timestamp(),
-                    start=0,
-                    num=1,
-                )
-                if due_messages:
-                    delayed_message_json = due_messages[0]
-                    if await redis_client.zrem(delayed_key, delayed_message_json):
-                        await self.publish(QueuedMessage.model_validate_json(delayed_message_json))
-
-                # Check each priority queue in order
-                for priority in priorities:
-                    queue_key = self._make_queue_key(priority)
-
-                    # Try to get a message (non-blocking)
-                    message_json = await redis_client.rpop(queue_key)
-                    if message_json:
-                        message = QueuedMessage.model_validate_json(message_json)
-                        success = await self._process_message(message)
-
-                        if success:
-                            message_processed = True
-
-                            # Implement basic rate limiting (30 messages/second max)
-                            now = datetime.now(timezone.utc)
-                            time_since_last = (now - last_message_time).total_seconds()
-                            if time_since_last < 0.033:  # ~30 messages/second
-                                rate_limit_delay = 0.033 - time_since_last
-                                await asyncio.sleep(rate_limit_delay)
-                            last_message_time = datetime.now(timezone.utc)
-                        else:
-                            # Re-queue failed message with incremented retry count
-                            await self._handle_failed_message(message)
-
-                        break  # Process one message at a time
-
-                # If no message was processed, wait a bit before checking again
-                if not message_processed:
-                    await asyncio.sleep(0.1)
-
-            except asyncio.CancelledError:
-                console.print("[yellow]Message consumer cancelled[/yellow]")
-                break
-            except Exception as e:
-                console.print(f"[red]Error in message consumer: {e}[/red]")
-                await asyncio.sleep(1)  # Wait before retrying
+    async def _auto_delete_message(self, chat_id: int, message_id: int, delay: int) -> None:
+        """Auto-delete a message after the specified delay."""
+        await asyncio.sleep(delay)
+        try:
+            await self._bot.delete_message(chat_id=chat_id, message_id=message_id)
+            console.print(f"[green]Auto-deleted message {message_id} from chat {chat_id}[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Failed to auto-delete message {message_id}: {e}[/yellow]")
 
     async def _process_message(self, message: QueuedMessage) -> bool:
         """Process a single message."""
@@ -553,36 +494,95 @@ class MessageQueue:
             console.print(f"[red]Message {message.message_id} exceeded max retries, moving to dead letter queue[/red]")
             await self._move_to_dead_letter_queue(message)
 
-    async def _requeue_message(self, message: QueuedMessage) -> None:
-        """Re-queue a message, potentially with a delay."""
-        if message.scheduled_for and message.scheduled_for > datetime.now(timezone.utc):
-            # Use Redis to schedule the message
-            redis_client = await self._get_redis()
-            delay_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
-            score = message.scheduled_for.timestamp()
-            await redis_client.zadd(delay_key, {message.model_dump_json(): score})
-        else:
-            # Re-queue immediately
-            await self.publish(message)
-
-    async def _move_to_dead_letter_queue(self, message: QueuedMessage) -> None:
-        """Move a failed message to the dead letter queue for manual review."""
+    async def _consume_messages(self) -> None:
+        """Main consumer loop that processes messages from Redis queues."""
         redis_client = await self._get_redis()
-        dlq_key = f"{settings.REDIS_KEY_PREFIX}dead_letter_queue"
-        await redis_client.lpush(dlq_key, message.model_dump_json())
+        delayed_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
 
-        # Log DLQ size for monitoring
-        dlq_size = await redis_client.llen(dlq_key)
-        console.print(f"[red]Dead letter queue now has {dlq_size} message(s) - check with /status[/red]")
+        # Priority order: URGENT -> HIGH -> NORMAL -> LOW
+        priorities = [
+            MessagePriority.URGENT,
+            MessagePriority.HIGH,
+            MessagePriority.NORMAL,
+            MessagePriority.LOW
+        ]
 
-    async def _auto_delete_message(self, chat_id: int, message_id: int, delay: int) -> None:
-        """Auto-delete a message after the specified delay."""
-        await asyncio.sleep(delay)
-        try:
-            await self._bot.delete_message(chat_id=chat_id, message_id=message_id)
-            console.print(f"[green]Auto-deleted message {message_id} from chat {chat_id}[/green]")
-        except Exception as e:
-            console.print(f"[yellow]Failed to auto-delete message {message_id}: {e}[/yellow]")
+        last_message_time = datetime.now(timezone.utc)
+        rate_limit_delay = 0
+
+        while self._running:
+            try:
+                message_processed = False
+
+                due_messages = await redis_client.zrangebyscore(
+                    delayed_key,
+                    min=0,
+                    max=datetime.now(timezone.utc).timestamp(),
+                    start=0,
+                    num=1,
+                )
+                if due_messages:
+                    delayed_message_json = due_messages[0]
+                    if await redis_client.zrem(delayed_key, delayed_message_json):
+                        await self.publish(QueuedMessage.model_validate_json(delayed_message_json))
+
+                # Check each priority queue in order
+                for priority in priorities:
+                    queue_key = self._make_queue_key(priority)
+
+                    # Try to get a message (non-blocking)
+                    message_json = await redis_client.rpop(queue_key)
+                    if message_json:
+                        message = QueuedMessage.model_validate_json(message_json)
+                        success = await self._process_message(message)
+
+                        if success:
+                            message_processed = True
+
+                            # Implement basic rate limiting (30 messages/second max)
+                            now = datetime.now(timezone.utc)
+                            time_since_last = (now - last_message_time).total_seconds()
+                            if time_since_last < 0.033:  # ~30 messages/second
+                                rate_limit_delay = 0.033 - time_since_last
+                                await asyncio.sleep(rate_limit_delay)
+                            last_message_time = datetime.now(timezone.utc)
+                        else:
+                            # Re-queue failed message with incremented retry count
+                            await self._handle_failed_message(message)
+
+                        break  # Process one message at a time
+
+                # If no message was processed, wait a bit before checking again
+                if not message_processed:
+                    await asyncio.sleep(0.1)
+
+            except asyncio.CancelledError:
+                console.print("[yellow]Message consumer cancelled[/yellow]")
+                break
+            except Exception as e:
+                console.print(f"[red]Error in message consumer: {e}[/red]")
+                await asyncio.sleep(1)  # Wait before retrying
+
+    async def start_consumer(self) -> None:
+        """Start the message consumer background task."""
+        if self._consumer_task and not self._consumer_task.done():
+            console.print("[yellow]Message consumer is already running[/yellow]")
+            return
+
+        self._running = True
+        self._consumer_task = asyncio.create_task(self._consume_messages())
+        console.print("[green]Message queue consumer started[/green]")
+
+    async def stop_consumer(self) -> None:
+        """Stop the message consumer."""
+        self._running = False
+        if self._consumer_task:
+            self._consumer_task.cancel()
+            try:
+                await self._consumer_task
+            except asyncio.CancelledError:
+                pass
+        console.print("[yellow]Message queue consumer stopped[/yellow]")
 
     async def get_queue_stats(self) -> Dict[str, int]:
         """Get statistics about the message queues."""
@@ -719,6 +719,21 @@ class MessageQueue:
         console.print(f"[green]Queued ARQ dump job {enhanced_job_data['job_id']} with metadata[/green]")
         return enhanced_job_data["job_id"]
 
+    def _extract_current_progress(self, metadata: Dict) -> Optional[Dict]:
+        """Extract current progress from metadata history."""
+        history = metadata.get("progress_history", [])
+        if history:
+            latest = history[-1]
+            return JobProgress(
+                current_step=latest.get("message", "Unknown"),
+                total_steps=latest.get("total_steps", 25),
+                current_step_number=latest.get("current_step_number", len(history)),
+                percentage=latest.get("percentage", 0.0),
+                details=str(latest),
+                error_message=latest.get("error_message"),
+            ).model_dump()
+        return None
+
     async def get_job_status(self, job_id: str) -> Optional[DumpJob]:
         """Enhanced ARQ status retrieval with rich metadata."""
         from dumpyarabot.arq_config import arq_pool
@@ -768,21 +783,6 @@ class MessageQueue:
         }
 
         return DumpJob.model_validate(job_data)
-
-    def _extract_current_progress(self, metadata: Dict) -> Optional[Dict]:
-        """Extract current progress from metadata history."""
-        history = metadata.get("progress_history", [])
-        if history:
-            latest = history[-1]
-            return JobProgress(
-                current_step=latest.get("message", "Unknown"),
-                total_steps=latest.get("total_steps", 25),
-                current_step_number=latest.get("current_step_number", len(history)),
-                percentage=latest.get("percentage", 0.0),
-                details=str(latest),
-                error_message=latest.get("error_message"),
-            ).model_dump()
-        return None
 
     async def get_active_jobs_with_metadata(self) -> List[DumpJob]:
         """Get active queued and running jobs with metadata."""

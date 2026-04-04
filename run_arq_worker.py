@@ -34,6 +34,15 @@ class ARQWorkerManager:
         self.worker: Optional[arq.Worker] = None
         self.shutdown_event = asyncio.Event()
 
+    def _setup_signal_handlers(self):
+        """Set up signal handlers for graceful shutdown."""
+        def signal_handler(signum, frame):
+            console.print(f"[yellow]Received signal {signum}, initiating graceful shutdown...[/yellow]")
+            self.shutdown_event.set()
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
     async def start_worker(self):
         """Start the ARQ worker."""
         console.print(f"[green]Starting ARQ worker: {self.worker_name}[/green]")
@@ -88,15 +97,6 @@ class ARQWorkerManager:
         except Exception as e:
             console.print(f"[red]Error starting worker {self.worker_name}: {e}[/red]")
             raise
-
-    def _setup_signal_handlers(self):
-        """Set up signal handlers for graceful shutdown."""
-        def signal_handler(signum, frame):
-            console.print(f"[yellow]Received signal {signum}, initiating graceful shutdown...[/yellow]")
-            self.shutdown_event.set()
-
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
 
     async def shutdown(self):
         """Gracefully shutdown the worker."""

@@ -38,6 +38,14 @@ class ProcessResult:
         return " ".join(self.command)
 
 
+class ProcessException(Exception):
+    """Exception raised by process execution failures."""
+
+    def __init__(self, message: str, result: Optional[ProcessResult] = None):
+        super().__init__(message)
+        self.result = result
+
+
 async def run_command(
     *args: str,
     cwd: Optional[Union[str, Path]] = None,
@@ -362,14 +370,6 @@ async def run_analysis_command(
             check=False,
             description=description or f"Analysis with {tool}",
         )
-
-
-class ProcessException(Exception):
-    """Exception raised by process execution failures."""
-
-    def __init__(self, message: str, result: Optional[ProcessResult] = None):
-        super().__init__(message)
-        self.result = result
 
 
 # Utility functions for common subprocess patterns

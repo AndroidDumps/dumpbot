@@ -109,6 +109,26 @@ async def _renew_expired_mockup_session(
     return mockup_review, mockup_state
 
 
+def _create_compact_controls_keyboard(request_id: str) -> "InlineKeyboardMarkup":
+    """Create compact mockup control buttons side by side."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                " Reset", callback_data=f"{CALLBACK_MOCKUP_RESET}{request_id}"
+            ),
+            InlineKeyboardButton(
+                "Back", callback_data=f"{CALLBACK_MOCKUP_BACK}{request_id}"
+            ),
+            InlineKeyboardButton(
+                " Delete", callback_data=f"{CALLBACK_MOCKUP_DELETE}{request_id}"
+            ),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def mockup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler for the /mockup command that creates a fake moderated request flow."""
     chat: Optional[Chat] = update.effective_chat
@@ -172,26 +192,6 @@ async def mockup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         text=control_text,
         reply_markup=_create_compact_controls_keyboard(request_id),
     )
-
-
-async def handle_mockup_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Handle mockup-specific callback queries for reset and back functionality."""
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    await query.answer()
-
-    callback_data = query.data
-
-    if callback_data.startswith(CALLBACK_MOCKUP_RESET):
-        await _handle_mockup_reset(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_MOCKUP_BACK):
-        await _handle_mockup_back(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_MOCKUP_DELETE):
-        await _handle_mockup_delete(query, context, callback_data)
 
 
 async def _handle_mockup_reset(
@@ -508,68 +508,24 @@ async def _handle_mockup_delete(
                 pass
 
 
-def _create_compact_controls_keyboard(request_id: str) -> "InlineKeyboardMarkup":
-    """Create compact mockup control buttons side by side."""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                " Reset", callback_data=f"{CALLBACK_MOCKUP_RESET}{request_id}"
-            ),
-            InlineKeyboardButton(
-                "Back", callback_data=f"{CALLBACK_MOCKUP_BACK}{request_id}"
-            ),
-            InlineKeyboardButton(
-                " Delete", callback_data=f"{CALLBACK_MOCKUP_DELETE}{request_id}"
-            ),
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# Enhanced callback handler that integrates with existing moderated system
-async def handle_enhanced_callback_query(
+async def handle_mockup_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Enhanced callback handler that supports both production and mockup callbacks."""
+    """Handle mockup-specific callback queries for reset and back functionality."""
     query = update.callback_query
     if not query or not query.data:
         return
 
-    callback_data = query.data
-
-    # Handle mockup-specific callbacks
-    if (
-        callback_data.startswith(CALLBACK_MOCKUP_RESET)
-        or callback_data.startswith(CALLBACK_MOCKUP_BACK)
-        or callback_data.startswith(CALLBACK_MOCKUP_DELETE)
-    ):
-        await handle_mockup_callback(update, context)
-        return
-
-    # For all other callbacks, use existing logic from moderated_handlers
     await query.answer()
 
-    # Parse callback_data to determine action type
-    if callback_data.startswith(CALLBACK_ACCEPT):
-        await _handle_accept_callback_with_mockup_state(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_REJECT):
-        await _handle_reject_callback_with_mockup_state(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_TOGGLE_ALT):
-        await _handle_toggle_callback_with_mockup_state(query, context, callback_data, "alt")
-    elif callback_data.startswith(CALLBACK_TOGGLE_FORCE):
-        await _handle_toggle_callback_with_mockup_state(query, context, callback_data, "force")
-    elif callback_data.startswith(CALLBACK_TOGGLE_PRIVDUMP):
-        await _handle_toggle_callback_with_mockup_state(query, context, callback_data, "privdump")
-    elif callback_data.startswith(CALLBACK_CANCEL_REQUEST):
-        await _handle_cancel_callback_with_mockup_state(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_SUBMIT_ACCEPTANCE):
-        await _handle_submit_callback_with_mockup_state(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_RESTART_CONFIRM) or callback_data.startswith(CALLBACK_RESTART_CANCEL):
-        # Import restart handler here to avoid circular imports
-        from dumpyarabot.handlers import handle_restart_callback
-        await handle_restart_callback(update, context)
+    callback_data = query.data
+
+    if callback_data.startswith(CALLBACK_MOCKUP_RESET):
+        await _handle_mockup_reset(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_MOCKUP_BACK):
+        await _handle_mockup_back(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_MOCKUP_DELETE):
+        await _handle_mockup_delete(query, context, callback_data)
 
 
 # Mockup-aware versions that handle state + delegate to main handlers
@@ -692,3 +648,45 @@ async def _handle_cancel_callback_with_mockup_state(
         await moderated_handlers._handle_cancel_callback(query, context, callback_data)
 
 
+# Enhanced callback handler that integrates with existing moderated system
+async def handle_enhanced_callback_query(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Enhanced callback handler that supports both production and mockup callbacks."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    callback_data = query.data
+
+    # Handle mockup-specific callbacks
+    if (
+        callback_data.startswith(CALLBACK_MOCKUP_RESET)
+        or callback_data.startswith(CALLBACK_MOCKUP_BACK)
+        or callback_data.startswith(CALLBACK_MOCKUP_DELETE)
+    ):
+        await handle_mockup_callback(update, context)
+        return
+
+    # For all other callbacks, use existing logic from moderated_handlers
+    await query.answer()
+
+    # Parse callback_data to determine action type
+    if callback_data.startswith(CALLBACK_ACCEPT):
+        await _handle_accept_callback_with_mockup_state(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_REJECT):
+        await _handle_reject_callback_with_mockup_state(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_TOGGLE_ALT):
+        await _handle_toggle_callback_with_mockup_state(query, context, callback_data, "alt")
+    elif callback_data.startswith(CALLBACK_TOGGLE_FORCE):
+        await _handle_toggle_callback_with_mockup_state(query, context, callback_data, "force")
+    elif callback_data.startswith(CALLBACK_TOGGLE_PRIVDUMP):
+        await _handle_toggle_callback_with_mockup_state(query, context, callback_data, "privdump")
+    elif callback_data.startswith(CALLBACK_CANCEL_REQUEST):
+        await _handle_cancel_callback_with_mockup_state(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_SUBMIT_ACCEPTANCE):
+        await _handle_submit_callback_with_mockup_state(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_RESTART_CONFIRM) or callback_data.startswith(CALLBACK_RESTART_CANCEL):
+        # Import restart handler here to avoid circular imports
+        from dumpyarabot.handlers import handle_restart_callback
+        await handle_restart_callback(update, context)

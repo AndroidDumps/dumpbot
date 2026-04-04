@@ -34,6 +34,64 @@ async def get_arq_start_time(arq_job_id: str) -> Optional[str]:
     return None
 
 
+def _create_unicode_bar(percentage: float, width: int) -> str:
+    """Create a Unicode progress bar with smooth sub-block precision."""
+    # Unicode block characters for smooth progress (index 0 = empty)
+    blocks = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
+
+    # Calculate progress
+    progress_chars = (percentage / 100) * width
+    full_blocks = int(progress_chars)
+    remainder = progress_chars - full_blocks
+
+    # Build the bar tracking character count separately
+    bar = "█" * full_blocks
+    chars_used = full_blocks
+
+    # Add partial block if there's remainder and space
+    if chars_used < width and remainder > 0:
+        partial_index = min(8, int(remainder * 8))
+        bar += blocks[partial_index]
+        chars_used += 1
+
+    # Fill remaining space
+    bar += " " * (width - chars_used)
+
+    return bar
+
+
+def _create_block_bar(percentage: float, width: int) -> str:
+    """Create a block-style progress bar using solid blocks."""
+    filled_blocks = round((percentage / 100) * width)
+    return "█" * filled_blocks + "░" * (width - filled_blocks)
+
+
+def _create_ascii_bar(percentage: float, width: int) -> str:
+    """Create an ASCII progress bar using = and - characters."""
+    filled_blocks = round((percentage / 100) * width)
+    return "=" * filled_blocks + "-" * (width - filled_blocks)
+
+
+def _create_progress_bar(percentage: float, width: int, style: str) -> str:
+    """Create the visual progress bar based on percentage and style."""
+    if style == "unicode":
+        return _create_unicode_bar(percentage, width)
+    elif style == "blocks":
+        return _create_block_bar(percentage, width)
+    else:  # ascii
+        return _create_ascii_bar(percentage, width)
+
+
+def _create_empty_bar(width: int, style: str) -> str:
+    """Create an empty progress bar."""
+    if style == "unicode":
+        return " " * width
+    elif style == "blocks":
+        return "░" * width
+    else:  # ascii
+        return "-" * width
+
+
 def generate_progress_bar(
     progress: Optional[Dict[str, Any]],
     width: int = 10,
@@ -95,64 +153,6 @@ def format_download_progress(progress: "DownloadProgress", bar_width: int = 10) 
     lines.append(" | ".join(parts))
 
     return "\n".join(lines)
-
-
-def _create_progress_bar(percentage: float, width: int, style: str) -> str:
-    """Create the visual progress bar based on percentage and style."""
-    if style == "unicode":
-        return _create_unicode_bar(percentage, width)
-    elif style == "blocks":
-        return _create_block_bar(percentage, width)
-    else:  # ascii
-        return _create_ascii_bar(percentage, width)
-
-
-def _create_unicode_bar(percentage: float, width: int) -> str:
-    """Create a Unicode progress bar with smooth sub-block precision."""
-    # Unicode block characters for smooth progress (index 0 = empty)
-    blocks = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
-
-    # Calculate progress
-    progress_chars = (percentage / 100) * width
-    full_blocks = int(progress_chars)
-    remainder = progress_chars - full_blocks
-
-    # Build the bar tracking character count separately
-    bar = "█" * full_blocks
-    chars_used = full_blocks
-
-    # Add partial block if there's remainder and space
-    if chars_used < width and remainder > 0:
-        partial_index = min(8, int(remainder * 8))
-        bar += blocks[partial_index]
-        chars_used += 1
-
-    # Fill remaining space
-    bar += " " * (width - chars_used)
-
-    return bar
-
-
-def _create_block_bar(percentage: float, width: int) -> str:
-    """Create a block-style progress bar using solid blocks."""
-    filled_blocks = round((percentage / 100) * width)
-    return "█" * filled_blocks + "░" * (width - filled_blocks)
-
-
-def _create_ascii_bar(percentage: float, width: int) -> str:
-    """Create an ASCII progress bar using = and - characters."""
-    filled_blocks = round((percentage / 100) * width)
-    return "=" * filled_blocks + "-" * (width - filled_blocks)
-
-
-def _create_empty_bar(width: int, style: str) -> str:
-    """Create an empty progress bar."""
-    if style == "unicode":
-        return " " * width
-    elif style == "blocks":
-        return "░" * width
-    else:  # ascii
-        return "-" * width
 
 
 def calculate_elapsed_time(
@@ -582,6 +582,31 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
     return text
 
 
+def format_time_ago(timestamp) -> str:
+    """Format a timestamp as time ago."""
+    if not timestamp:
+        return "Unknown"
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    # Handle naive datetimes by assuming UTC
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    diff = now - timestamp
+
+    seconds = int(diff.total_seconds())
+    if seconds < 60:
+        return f"{seconds}s ago"
+    elif seconds < 3600:
+        return f"{seconds // 60}m ago"
+    elif seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    else:
+        return f"{seconds // 86400}d ago"
+
+
 async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["DumpJob"]) -> str:
     """Format active and recent jobs overview."""
     text = " *Job Status Overview*\n\n"
@@ -628,30 +653,3 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
             text += f"• {status_emoji} `{job.job_id[:8]}` - {escape_markdown(device_name)} ({time_ago})\n"
 
     return text
-
-
-def format_time_ago(timestamp) -> str:
-    """Format a timestamp as time ago."""
-    if not timestamp:
-        return "Unknown"
-
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
-
-    # Handle naive datetimes by assuming UTC
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-
-    diff = now - timestamp
-
-    seconds = int(diff.total_seconds())
-    if seconds < 60:
-        return f"{seconds}s ago"
-    elif seconds < 3600:
-        return f"{seconds // 60}m ago"
-    elif seconds < 86400:
-        return f"{seconds // 3600}h ago"
-    else:
-        return f"{seconds // 86400}d ago"
-
-

@@ -16,48 +16,33 @@ class PropertyExtractor:
     def __init__(self, work_dir: str):
         self.work_dir = Path(work_dir)
 
-    async def extract_properties(self) -> Dict[str, Any]:
-        """Extract comprehensive device properties from build.prop files."""
-        console.print("[blue]Extracting device properties...[/blue]")
+    async def _search_property(self, patterns: List[str], paths: List[str]) -> Optional[str]:
+        """Search for property patterns in specified paths using ripgrep."""
+        for pattern in patterns:
+            for path in paths:
+                try:
+                    # Use ripgrep to search for property
+                    expanded_paths = expand_glob_paths(self.work_dir, path)
+                    if not expanded_paths:
+                        continue
 
-        # Initialize properties dictionary
-        props = {}
+                    result = await run_command(
+                        "rg", "-m1", "-INoP", "--no-messages",
+                        f"(?<=^{pattern}=).*",
+                        *[str(p) for p in expanded_paths],
+                        cwd=self.work_dir,
+                        timeout=30.0,
+                        quiet=True
+                    )
 
-        # Extract basic properties
-        props["flavor"] = await self._extract_flavor()
-        props["release"] = await self._extract_release()
-        props["id"] = await self._extract_id()
-        props["incremental"] = await self._extract_incremental()
-        props["tags"] = await self._extract_tags()
-        props["platform"] = await self._extract_platform()
-        props["manufacturer"] = await self._extract_manufacturer()
-        props["fingerprint"] = await self._extract_fingerprint()
-        props["codename"] = await self._extract_codename()
-        props["brand"] = await self._extract_brand(props)
-        props["description"] = await self._extract_description(props)
-        props["is_ab"] = await self._extract_is_ab()
+                    if result.success and result.stdout:
+                        value = result.stdout.strip().split('\n')[0]
+                        if value:
+                            return value
+                except Exception:
+                    continue
 
-        # Extract special keys
-        props["oplus_pipeline_key"] = await self._extract_oplus_pipeline_key()
-        props["honor_product_base_version"] = await self._extract_honor_product_base_version()
-
-        # Generate derived properties
-        props["branch"] = self._generate_branch_name(props)
-        props["repo_subgroup"] = (props["brand"] or props["manufacturer"] or "unknown").lower()
-        props["repo_name"] = (props["codename"] or "unknown").lower()
-        props["repo"] = f"{props['repo_subgroup']}/{props['repo_name']}"
-
-        # Clean up properties
-        props = self._clean_properties(props)
-
-        # Validate required properties
-        if not props.get("codename"):
-            raise Exception("Codename not detected! Aborting!")
-
-        # Print extracted properties
-        self._log_properties(props)
-
-        return props
+        return None
 
     async def _extract_flavor(self) -> Optional[str]:
         """Extract build flavor."""
@@ -386,34 +371,6 @@ class PropertyExtractor:
             ["product_h/etc/prop/local*.prop"]
         )
 
-    async def _search_property(self, patterns: List[str], paths: List[str]) -> Optional[str]:
-        """Search for property patterns in specified paths using ripgrep."""
-        for pattern in patterns:
-            for path in paths:
-                try:
-                    # Use ripgrep to search for property
-                    expanded_paths = expand_glob_paths(self.work_dir, path)
-                    if not expanded_paths:
-                        continue
-
-                    result = await run_command(
-                        "rg", "-m1", "-INoP", "--no-messages",
-                        f"(?<=^{pattern}=).*",
-                        *[str(p) for p in expanded_paths],
-                        cwd=self.work_dir,
-                        timeout=30.0,
-                        quiet=True
-                    )
-
-                    if result.success and result.stdout:
-                        value = result.stdout.strip().split('\n')[0]
-                        if value:
-                            return value
-                except Exception:
-                    continue
-
-        return None
-
 
     def _generate_branch_name(self, props: Dict[str, Any]) -> str:
         """Generate branch name from description and special keys."""
@@ -473,6 +430,49 @@ class PropertyExtractor:
         for key, value in props.items():
             if value:
                 console.print(f"  {key}: {value}")
+
+    async def extract_properties(self) -> Dict[str, Any]:
+        """Extract comprehensive device properties from build.prop files."""
+        console.print("[blue]Extracting device properties...[/blue]")
+
+        # Initialize properties dictionary
+        props = {}
+
+        # Extract basic properties
+        props["flavor"] = await self._extract_flavor()
+        props["release"] = await self._extract_release()
+        props["id"] = await self._extract_id()
+        props["incremental"] = await self._extract_incremental()
+        props["tags"] = await self._extract_tags()
+        props["platform"] = await self._extract_platform()
+        props["manufacturer"] = await self._extract_manufacturer()
+        props["fingerprint"] = await self._extract_fingerprint()
+        props["codename"] = await self._extract_codename()
+        props["brand"] = await self._extract_brand(props)
+        props["description"] = await self._extract_description(props)
+        props["is_ab"] = await self._extract_is_ab()
+
+        # Extract special keys
+        props["oplus_pipeline_key"] = await self._extract_oplus_pipeline_key()
+        props["honor_product_base_version"] = await self._extract_honor_product_base_version()
+
+        # Generate derived properties
+        props["branch"] = self._generate_branch_name(props)
+        props["repo_subgroup"] = (props["brand"] or props["manufacturer"] or "unknown").lower()
+        props["repo_name"] = (props["codename"] or "unknown").lower()
+        props["repo"] = f"{props['repo_subgroup']}/{props['repo_name']}"
+
+        # Clean up properties
+        props = self._clean_properties(props)
+
+        # Validate required properties
+        if not props.get("codename"):
+            raise Exception("Codename not detected! Aborting!")
+
+        # Print extracted properties
+        self._log_properties(props)
+
+        return props
 
     async def generate_board_info(self) -> None:
         """Generate board-info.txt file."""

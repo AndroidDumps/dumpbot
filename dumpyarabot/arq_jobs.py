@@ -37,6 +37,31 @@ _SENSITIVE_PATTERNS = [
 _URL_PATTERN = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
 
 
+def _sanitize_url_for_log(url_value: Any) -> str:
+    """Redact credentials and query parameters from logged URLs."""
+    url = str(url_value or "unknown")
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+
+    try:
+        hostname = parts.hostname or ""
+        port = parts.port
+        username = parts.username
+    except ValueError:
+        return url
+
+    netloc = hostname
+    if port:
+        netloc = f"{netloc}:{port}"
+    if username:
+        netloc = f"[REDACTED]@{netloc}"
+
+    sanitized = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    return sanitized or url
+
+
 def _sanitize_traceback(tb_str: str) -> str:
     """Remove sensitive tokens and credentials from traceback strings."""
     for pattern in _SENSITIVE_PATTERNS:
@@ -66,67 +91,6 @@ def _derive_last_successful_step(progress_history: list[Dict[str, Any]], failed_
 
     latest = progress_history[-1].get("message")
     return latest if latest else None
-
-
-def _sanitize_url_for_log(url_value: Any) -> str:
-    """Redact credentials and query parameters from logged URLs."""
-    url = str(url_value or "unknown")
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url
-
-    try:
-        hostname = parts.hostname or ""
-        port = parts.port
-        username = parts.username
-    except ValueError:
-        return url
-
-    netloc = hostname
-    if port:
-        netloc = f"{netloc}:{port}"
-    if username:
-        netloc = f"[REDACTED]@{netloc}"
-
-    sanitized = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-    return sanitized or url
-
-
-class PeriodicTimerUpdate:
-    """Context manager for periodic elapsed time updates during long operations."""
-
-    def __init__(self, job_data: Dict[str, Any], message: str, progress: Dict[str, Any], interval: int = 30):
-        self.job_data = job_data
-        self.message = message
-        self.progress = progress
-        self.interval = interval
-        self.task = None
-        self.running = False
-
-    async def __aenter__(self):
-        self.running = True
-        self.task = asyncio.create_task(self._periodic_update())
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.running = False
-        if self.task and not self.task.done():
-            self.task.cancel()
-            try:
-                await self.task
-            except asyncio.CancelledError:
-                pass
-
-    async def _periodic_update(self):
-        """Send periodic updates with refreshed elapsed time."""
-        try:
-            while self.running:
-                await asyncio.sleep(self.interval)
-                if self.running:  # Check again after sleep
-                    await _send_status_update(self.job_data, self.message, self.progress, self.job_data.get("metadata"))
-        except asyncio.CancelledError:
-            pass
 
 
 async def _send_status_update(
@@ -184,6 +148,42 @@ async def _send_status_update(
                 "progress": progress
             }
         )
+
+
+class PeriodicTimerUpdate:
+    """Context manager for periodic elapsed time updates during long operations."""
+
+    def __init__(self, job_data: Dict[str, Any], message: str, progress: Dict[str, Any], interval: int = 30):
+        self.job_data = job_data
+        self.message = message
+        self.progress = progress
+        self.interval = interval
+        self.task = None
+        self.running = False
+
+    async def _periodic_update(self):
+        """Send periodic updates with refreshed elapsed time."""
+        try:
+            while self.running:
+                await asyncio.sleep(self.interval)
+                if self.running:  # Check again after sleep
+                    await _send_status_update(self.job_data, self.message, self.progress, self.job_data.get("metadata"))
+        except asyncio.CancelledError:
+            pass
+
+    async def __aenter__(self):
+        self.running = True
+        self.task = asyncio.create_task(self._periodic_update())
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.running = False
+        if self.task and not self.task.done():
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
 
 
 def _build_failure_log_text(job_data: Dict[str, Any]) -> str:

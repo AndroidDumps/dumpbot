@@ -19,15 +19,6 @@ class FirmwareExtractor:
         self.work_dir = Path(work_dir)
         self.firmware_extractor_path = Path.home() / "Firmware_extractor"
 
-    async def extract_firmware(self, job: DumpJob, firmware_path: str) -> str:
-        """Extract firmware and return extraction directory."""
-        console.print(f"[blue]Extracting firmware: {firmware_path}[/blue]")
-
-        if job.dump_args.use_alt_dumper:
-            return await self._extract_with_alternative_dumper(firmware_path)
-        else:
-            return await self._extract_with_python_dumper(firmware_path)
-
     async def _extract_with_python_dumper(self, firmware_path: str) -> str:
         """Extract using the modern Python dumpyara tool."""
         result = await run_command(
@@ -38,29 +29,6 @@ class FirmwareExtractor:
             description="Python dumper extraction"
         )
 
-        return str(self.work_dir)
-
-    async def _extract_with_alternative_dumper(self, firmware_path: str) -> str:
-        """Extract using the alternative Firmware_extractor toolkit."""
-        console.print("[blue]Using alternative dumper (Firmware_extractor)...[/blue]")
-
-        # Clone/update Firmware_extractor
-        await self._setup_firmware_extractor()
-
-        # Run the extractor script
-        extractor_script = self.firmware_extractor_path / "extractor.sh"
-        result = await run_command(
-            "bash", str(extractor_script), firmware_path, str(self.work_dir),
-            cwd=self.work_dir,
-            timeout=600.0,
-            check=True,
-            description="Alternative dumper extraction"
-        )
-
-        # Extract individual partitions
-        await self._extract_partitions()
-
-        console.print("[green]Alternative dumper extraction completed[/green]")
         return str(self.work_dir)
 
     async def _setup_firmware_extractor(self):
@@ -77,6 +45,26 @@ class FirmwareExtractor:
                 "-C", str(self.firmware_extractor_path), "pull", "-q", "--rebase",
                 description="Updating Firmware_extractor"
             )
+
+    async def _extract_fsg_partition(self):
+        """Extract fsg.mbn partition if present."""
+        fsg_file = self.work_dir / "fsg.mbn"
+        if not fsg_file.exists():
+            return
+
+        console.print("[blue]Extracting fsg.mbn via 7zz...[/blue]")
+
+        fsg_dir = self.work_dir / "radio" / "fsg"
+        fsg_dir.mkdir(parents=True, exist_ok=True)
+
+        result = await run_extraction_command(
+            "7zz", "-snld", "x", str(fsg_file), f"-o{fsg_dir}",
+            description="Extracting fsg.mbn via 7zz"
+        )
+
+        if result.success:
+            safe_remove_file(fsg_file)
+            console.print("[green]Successfully extracted fsg.mbn[/green]")
 
     async def _extract_partitions(self):
         """Extract individual partition images using alternative dumper tools."""
@@ -145,131 +133,37 @@ class FirmwareExtractor:
         # Extract fsg.mbn from radio.img if present
         await self._extract_fsg_partition()
 
-    async def _extract_fsg_partition(self):
-        """Extract fsg.mbn partition if present."""
-        fsg_file = self.work_dir / "fsg.mbn"
-        if not fsg_file.exists():
-            return
+    async def _extract_with_alternative_dumper(self, firmware_path: str) -> str:
+        """Extract using the alternative Firmware_extractor toolkit."""
+        console.print("[blue]Using alternative dumper (Firmware_extractor)...[/blue]")
 
-        console.print("[blue]Extracting fsg.mbn via 7zz...[/blue]")
+        # Clone/update Firmware_extractor
+        await self._setup_firmware_extractor()
 
-        fsg_dir = self.work_dir / "radio" / "fsg"
-        fsg_dir.mkdir(parents=True, exist_ok=True)
-
-        result = await run_extraction_command(
-            "7zz", "-snld", "x", str(fsg_file), f"-o{fsg_dir}",
-            description="Extracting fsg.mbn via 7zz"
+        # Run the extractor script
+        extractor_script = self.firmware_extractor_path / "extractor.sh"
+        result = await run_command(
+            "bash", str(extractor_script), firmware_path, str(self.work_dir),
+            cwd=self.work_dir,
+            timeout=600.0,
+            check=True,
+            description="Alternative dumper extraction"
         )
 
-        if result.success:
-            safe_remove_file(fsg_file)
-            console.print("[green]Successfully extracted fsg.mbn[/green]")
+        # Extract individual partitions
+        await self._extract_partitions()
 
-    async def process_boot_images(self) -> None:
-        """Process boot images (boot.img, vendor_boot.img, etc.)."""
-        boot_images = [
-            "init_boot.img",
-            "vendor_kernel_boot.img",
-            "vendor_boot.img",
-            "boot.img",
-            "recovery.img",
-            "dtbo.img",
-        ]
+        console.print("[green]Alternative dumper extraction completed[/green]")
+        return str(self.work_dir)
 
-        # Move boot images to work directory root if they're in subdirectories
-        for image_name in boot_images:
-            found_images = find_files_by_pattern(self.work_dir, [image_name], recursive=True)
-            if found_images and not (self.work_dir / image_name).exists():
-                move_file_to_root(found_images[0], self.work_dir)
+    async def extract_firmware(self, job: DumpJob, firmware_path: str) -> str:
+        """Extract firmware and return extraction directory."""
+        console.print(f"[blue]Extracting firmware: {firmware_path}[/blue]")
 
-        # Process each boot image
-        for image_name in boot_images:
-            image_path = self.work_dir / image_name
-            if image_path.exists():
-                await self._process_single_boot_image(image_path)
-
-        # Process Oppo/Realme/OnePlus images in special directories
-        await self._process_oppo_images()
-
-    async def _process_single_boot_image(self, image_path: Path):
-        """Process a single boot image file."""
-        image_name = image_path.name
-        output_dir = self.work_dir / image_path.stem
-
-        console.print(f"[blue]Processing {image_name}...[/blue]")
-
-        if image_name == "boot.img":
-            await self._process_boot_img(image_path, output_dir)
-        elif image_name == "recovery.img":
-            await self._process_recovery_img(image_path, output_dir)
-        elif image_name in ["vendor_boot.img", "vendor_kernel_boot.img", "init_boot.img"]:
-            await self._process_vendor_boot_img(image_path, output_dir)
-        elif image_name == "dtbo.img":
-            await self._process_dtbo_img(image_path, output_dir)
-
-    async def _process_boot_img(self, image_path: Path, output_dir: Path):
-        """Process boot.img with comprehensive analysis."""
-        output_dir.mkdir(exist_ok=True)
-
-        # Extract kernel, ramdisk, etc. if using alternative dumper
-        if self.firmware_extractor_path.exists():
-            await self._unpack_boot_image(image_path, output_dir)
-
-        # Extract ikconfig (kernel configuration)
-        await self._extract_ikconfig(image_path)
-
-        # Generate kallsyms.txt (kernel symbols)
-        await self._extract_kallsyms(image_path)
-
-        # Generate analyzable ELF
-        await self._extract_boot_elf(image_path)
-
-        # Extract and process device tree blobs
-        await self._extract_device_trees(image_path, output_dir)
-
-    async def _process_vendor_boot_img(self, image_path: Path, output_dir: Path):
-        """Process vendor_boot.img or similar images."""
-        output_dir.mkdir(exist_ok=True)
-
-        # Extract contents if using alternative dumper
-        if self.firmware_extractor_path.exists():
-            await self._unpack_boot_image(image_path, output_dir)
-
-        # Extract device tree blobs
-        await self._extract_device_trees(image_path, output_dir)
-
-    async def _process_recovery_img(self, image_path: Path, output_dir: Path):
-        """Process recovery.img by unpacking the image and extracting its ramdisk."""
-        output_dir.mkdir(exist_ok=True)
-
-        if self.firmware_extractor_path.exists():
-            await self._unpack_boot_image(image_path, output_dir)
-
-        await self._extract_device_trees(image_path, output_dir)
-
-    async def _process_dtbo_img(self, image_path: Path, output_dir: Path):
-        """Process dtbo.img."""
-        output_dir.mkdir(exist_ok=True)
-
-        # Extract device tree overlays
-        await self._extract_device_trees(image_path, output_dir, is_dtbo=True)
-
-    async def _unpack_boot_image(self, image_path: Path, output_dir: Path):
-        """Unpack boot image using unpackbootimg."""
-        unpackbootimg = self.firmware_extractor_path / "tools" / "unpackbootimg"
-        if not unpackbootimg.exists():
-            return
-
-        ramdisk_dir = output_dir / "ramdisk"
-        ramdisk_dir.mkdir(exist_ok=True)
-
-        await run_extraction_command(
-            str(unpackbootimg), "-i", str(image_path), "-o", str(output_dir),
-            description=f"Unpacking {image_path.name}"
-        )
-
-        # Extract ramdisk if present
-        await self._extract_ramdisk(output_dir, ramdisk_dir)
+        if job.dump_args.use_alt_dumper:
+            return await self._extract_with_alternative_dumper(firmware_path)
+        else:
+            return await self._extract_with_python_dumper(firmware_path)
 
     async def _extract_ramdisk(self, output_dir: Path, ramdisk_dir: Path):
         """Extract ramdisk from boot image."""
@@ -307,6 +201,23 @@ class FirmwareExtractor:
                     description="Extracting ramdisk archive"
                 )
                 safe_remove_file(temp_ramdisk)
+
+    async def _unpack_boot_image(self, image_path: Path, output_dir: Path):
+        """Unpack boot image using unpackbootimg."""
+        unpackbootimg = self.firmware_extractor_path / "tools" / "unpackbootimg"
+        if not unpackbootimg.exists():
+            return
+
+        ramdisk_dir = output_dir / "ramdisk"
+        ramdisk_dir.mkdir(exist_ok=True)
+
+        await run_extraction_command(
+            str(unpackbootimg), "-i", str(image_path), "-o", str(output_dir),
+            description=f"Unpacking {image_path.name}"
+        )
+
+        # Extract ramdisk if present
+        await self._extract_ramdisk(output_dir, ramdisk_dir)
 
     async def _extract_ikconfig(self, image_path: Path):
         """Extract kernel configuration."""
@@ -435,6 +346,69 @@ class FirmwareExtractor:
                     console.print(f"[yellow]Error decompiling {dtb_file.name}: {e}[/yellow]")
                     safe_remove_file(dts_file)
 
+    async def _process_boot_img(self, image_path: Path, output_dir: Path):
+        """Process boot.img with comprehensive analysis."""
+        output_dir.mkdir(exist_ok=True)
+
+        # Extract kernel, ramdisk, etc. if using alternative dumper
+        if self.firmware_extractor_path.exists():
+            await self._unpack_boot_image(image_path, output_dir)
+
+        # Extract ikconfig (kernel configuration)
+        await self._extract_ikconfig(image_path)
+
+        # Generate kallsyms.txt (kernel symbols)
+        await self._extract_kallsyms(image_path)
+
+        # Generate analyzable ELF
+        await self._extract_boot_elf(image_path)
+
+        # Extract and process device tree blobs
+        await self._extract_device_trees(image_path, output_dir)
+
+    async def _process_vendor_boot_img(self, image_path: Path, output_dir: Path):
+        """Process vendor_boot.img or similar images."""
+        output_dir.mkdir(exist_ok=True)
+
+        # Extract contents if using alternative dumper
+        if self.firmware_extractor_path.exists():
+            await self._unpack_boot_image(image_path, output_dir)
+
+        # Extract device tree blobs
+        await self._extract_device_trees(image_path, output_dir)
+
+    async def _process_recovery_img(self, image_path: Path, output_dir: Path):
+        """Process recovery.img by unpacking the image and extracting its ramdisk."""
+        output_dir.mkdir(exist_ok=True)
+
+        if self.firmware_extractor_path.exists():
+            await self._unpack_boot_image(image_path, output_dir)
+
+        await self._extract_device_trees(image_path, output_dir)
+
+    async def _process_dtbo_img(self, image_path: Path, output_dir: Path):
+        """Process dtbo.img."""
+        output_dir.mkdir(exist_ok=True)
+
+        # Extract device tree overlays
+        await self._extract_device_trees(image_path, output_dir, is_dtbo=True)
+
+    async def _process_single_boot_image(self, image_path: Path):
+        """Process a single boot image file."""
+        image_name = image_path.name
+        output_dir = self.work_dir / image_path.stem
+
+        console.print(f"[blue]Processing {image_name}...[/blue]")
+
+        if image_name == "boot.img":
+            await self._process_boot_img(image_path, output_dir)
+        elif image_name == "recovery.img":
+            await self._process_recovery_img(image_path, output_dir)
+        elif image_name in ["vendor_boot.img", "vendor_kernel_boot.img", "init_boot.img"]:
+            await self._process_vendor_boot_img(image_path, output_dir)
+        elif image_name == "dtbo.img":
+            await self._process_dtbo_img(image_path, output_dir)
+
     async def _process_oppo_images(self):
         """Process Oppo/Realme/OnePlus images in special directories."""
         special_dirs = ["vendor/euclid", "system/system/euclid", "reserve/reserve"]
@@ -465,3 +439,29 @@ class FirmwareExtractor:
                     console.print(f"[green]Extracted {img_file.name}[/green]")
                 else:
                     console.print(f"[yellow]Failed to extract {img_file.name}[/yellow]")
+
+    async def process_boot_images(self) -> None:
+        """Process boot images (boot.img, vendor_boot.img, etc.)."""
+        boot_images = [
+            "init_boot.img",
+            "vendor_kernel_boot.img",
+            "vendor_boot.img",
+            "boot.img",
+            "recovery.img",
+            "dtbo.img",
+        ]
+
+        # Move boot images to work directory root if they're in subdirectories
+        for image_name in boot_images:
+            found_images = find_files_by_pattern(self.work_dir, [image_name], recursive=True)
+            if found_images and not (self.work_dir / image_name).exists():
+                move_file_to_root(found_images[0], self.work_dir)
+
+        # Process each boot image
+        for image_name in boot_images:
+            image_path = self.work_dir / image_name
+            if image_path.exists():
+                await self._process_single_boot_image(image_path)
+
+        # Process Oppo/Realme/OnePlus images in special directories
+        await self._process_oppo_images()

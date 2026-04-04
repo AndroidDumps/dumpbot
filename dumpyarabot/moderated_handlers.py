@@ -204,48 +204,6 @@ async def handle_request_message(
         )
 
 
-async def handle_callback_query(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Handle button callbacks for accept/reject and option toggles."""
-    console.print("[magenta]=== CALLBACK QUERY HANDLER STARTED ===[/magenta]")
-
-    query = update.callback_query
-    if not query or not query.data:
-        console.print("[red]Query or query data is None[/red]")
-        return
-
-    await query.answer()
-
-    callback_data = query.data
-    console.print(f"[blue]Processing callback: {callback_data}[/blue]")
-
-    # Parse callback_data to determine action type
-    if callback_data.startswith(CALLBACK_ACCEPT):
-        console.print("[cyan]Taking ACCEPT callback path[/cyan]")
-        await _handle_accept_callback(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_REJECT):
-        console.print("[cyan]Taking REJECT callback path[/cyan]")
-        await _handle_reject_callback(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_TOGGLE_ALT):
-        console.print("[cyan]Taking TOGGLE_ALT callback path[/cyan]")
-        await _handle_toggle_callback(query, context, callback_data, "alt")
-    elif callback_data.startswith(CALLBACK_TOGGLE_FORCE):
-        console.print("[cyan]Taking TOGGLE_FORCE callback path[/cyan]")
-        await _handle_toggle_callback(query, context, callback_data, "force")
-    elif callback_data.startswith(CALLBACK_TOGGLE_PRIVDUMP):
-        console.print("[cyan]Taking TOGGLE_PRIVDUMP callback path[/cyan]")
-        await _handle_toggle_callback(query, context, callback_data, "privdump")
-    elif callback_data.startswith(CALLBACK_CANCEL_REQUEST):
-        console.print("[cyan]Taking CANCEL_REQUEST callback path[/cyan]")
-        await _handle_cancel_callback(query, context, callback_data)
-    elif callback_data.startswith(CALLBACK_SUBMIT_ACCEPTANCE):
-        console.print("[cyan]Taking SUBMIT_ACCEPTANCE callback path[/cyan]")
-        await _handle_submit_callback(query, context, callback_data)
-    else:
-        console.print(f"[red]Unknown callback data: {callback_data}[/red]")
-
-
 async def _handle_accept_callback(
     query: Any, context: ContextTypes.DEFAULT_TYPE, callback_data: str
 ) -> None:
@@ -407,6 +365,89 @@ async def _handle_submit_callback(
         await query.edit_message_text(
             f" Error processing request {request_id}: {str(e)}"
         )
+
+
+async def _handle_cancel_callback(
+    query: Any, context: ContextTypes.DEFAULT_TYPE, callback_data: str
+) -> None:
+    """Handle cancel request callback."""
+    request_id = callback_data.replace(CALLBACK_CANCEL_REQUEST, "")
+
+    if not query.message:
+        return
+
+    pending = await ReviewStorage.get_pending_review(context, request_id)
+
+    if not pending:
+        await query.edit_message_text(
+            text=" Request not found or already processed", reply_markup=None
+        )
+        return
+
+    try:
+        # Send cancellation message in review chat
+        await message_queue.send_notification(
+            chat_id=pending.review_chat_id,
+            text=f" Request {request_id} cancelled by user @{pending.requester_username}",
+            context={"action": "request_cancelled", "request_id": request_id, "user": pending.requester_username}
+        )
+
+        # Update submission confirmation message to show cancelled
+        await query.edit_message_text(text=" Request cancelled", reply_markup=None)
+
+        # Clean up request data
+        await _cleanup_request(context, request_id)
+
+        console.print(f"[yellow]Request {request_id} cancelled by user[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error cancelling request: {e}[/red]")
+        console.print_exception()
+        await query.edit_message_text(
+            text=" Error cancelling request", reply_markup=None
+        )
+
+
+async def handle_callback_query(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle button callbacks for accept/reject and option toggles."""
+    console.print("[magenta]=== CALLBACK QUERY HANDLER STARTED ===[/magenta]")
+
+    query = update.callback_query
+    if not query or not query.data:
+        console.print("[red]Query or query data is None[/red]")
+        return
+
+    await query.answer()
+
+    callback_data = query.data
+    console.print(f"[blue]Processing callback: {callback_data}[/blue]")
+
+    # Parse callback_data to determine action type
+    if callback_data.startswith(CALLBACK_ACCEPT):
+        console.print("[cyan]Taking ACCEPT callback path[/cyan]")
+        await _handle_accept_callback(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_REJECT):
+        console.print("[cyan]Taking REJECT callback path[/cyan]")
+        await _handle_reject_callback(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_TOGGLE_ALT):
+        console.print("[cyan]Taking TOGGLE_ALT callback path[/cyan]")
+        await _handle_toggle_callback(query, context, callback_data, "alt")
+    elif callback_data.startswith(CALLBACK_TOGGLE_FORCE):
+        console.print("[cyan]Taking TOGGLE_FORCE callback path[/cyan]")
+        await _handle_toggle_callback(query, context, callback_data, "force")
+    elif callback_data.startswith(CALLBACK_TOGGLE_PRIVDUMP):
+        console.print("[cyan]Taking TOGGLE_PRIVDUMP callback path[/cyan]")
+        await _handle_toggle_callback(query, context, callback_data, "privdump")
+    elif callback_data.startswith(CALLBACK_CANCEL_REQUEST):
+        console.print("[cyan]Taking CANCEL_REQUEST callback path[/cyan]")
+        await _handle_cancel_callback(query, context, callback_data)
+    elif callback_data.startswith(CALLBACK_SUBMIT_ACCEPTANCE):
+        console.print("[cyan]Taking SUBMIT_ACCEPTANCE callback path[/cyan]")
+        await _handle_submit_callback(query, context, callback_data)
+    else:
+        console.print(f"[red]Unknown callback data: {callback_data}[/red]")
 
 
 async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -687,45 +728,4 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             chat_id=chat.id,
             text=f" Error processing rejection for request {request_id}: {str(e)}",
             context={"command": "reject", "error": "processing_exception", "request_id": request_id, "exception": str(e)}
-        )
-
-
-async def _handle_cancel_callback(
-    query: Any, context: ContextTypes.DEFAULT_TYPE, callback_data: str
-) -> None:
-    """Handle cancel request callback."""
-    request_id = callback_data.replace(CALLBACK_CANCEL_REQUEST, "")
-
-    if not query.message:
-        return
-
-    pending = await ReviewStorage.get_pending_review(context, request_id)
-
-    if not pending:
-        await query.edit_message_text(
-            text=" Request not found or already processed", reply_markup=None
-        )
-        return
-
-    try:
-        # Send cancellation message in review chat
-        await message_queue.send_notification(
-            chat_id=pending.review_chat_id,
-            text=f" Request {request_id} cancelled by user @{pending.requester_username}",
-            context={"action": "request_cancelled", "request_id": request_id, "user": pending.requester_username}
-        )
-
-        # Update submission confirmation message to show cancelled
-        await query.edit_message_text(text=" Request cancelled", reply_markup=None)
-
-        # Clean up request data
-        await _cleanup_request(context, request_id)
-
-        console.print(f"[yellow]Request {request_id} cancelled by user[/yellow]")
-
-    except Exception as e:
-        console.print(f"[red]Error cancelling request: {e}[/red]")
-        console.print_exception()
-        await query.edit_message_text(
-            text=" Error cancelling request", reply_markup=None
         )

@@ -26,57 +26,6 @@ class FirmwareDownloader:
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
-    async def download_firmware(
-        self,
-        job: DumpJob,
-        on_progress: ProgressCallback | None = None,
-    ) -> Tuple[str, str]:
-        """Download firmware and return (file_path, file_name).
-
-        Args:
-            job: The dump job containing URL and options.
-            on_progress: Optional async callback invoked with each DownloadProgress
-                         snapshot during aria2 RPC downloads.
-        """
-        url = str(job.dump_args.url)
-
-        # Check if it's a local file
-        if os.path.isfile(url):
-            console.print(f"[green]Found local file: {url}[/green]")
-            # Copy to work directory
-            file_name = Path(url).name
-            dest_path = self.work_dir / file_name
-            shutil.copy2(url, dest_path)
-            return str(dest_path), file_name
-
-        # Optimize URL with mirrors
-        optimized_url = await self._optimize_url(url)
-        console.print(f"[blue]Downloading from: {optimized_url}[/blue]")
-
-        # Download based on URL type
-        file_path = await self._download_by_type(optimized_url, on_progress=on_progress)
-        file_name = Path(file_path).name
-
-        console.print(f"[green]Downloaded: {file_name} ({get_file_size_formatted(file_path)})[/green]")
-        return file_path, file_name
-
-    async def _optimize_url(self, url: str) -> str:
-        """Optimize URL with best available mirrors."""
-        # Xiaomi mirror optimization
-        if "d.miui.com" in url:
-            return await self._optimize_xiaomi_url(url)
-
-        # Pixeldrain optimization
-        if "pixeldrain.com/u" in url:
-            file_id = url.split("/")[-1]
-            return f"https://pd.cybar.xyz/{file_id}"
-
-        if "pixeldrain.com/d" in url:
-            file_id = url.split("/")[-1]
-            return f"https://pixeldrain.com/api/filesystem/{file_id}"
-
-        return url
-
     async def _optimize_xiaomi_url(self, url: str) -> str:
         """Find best Xiaomi mirror."""
         # Skip if already using recommended mirror
@@ -121,18 +70,22 @@ class FirmwareDownloader:
         console.print("[yellow]All mirrors failed, using original URL[/yellow]")
         return url
 
-    async def _download_by_type(
-        self, url: str, on_progress: ProgressCallback | None = None
-    ) -> str:
-        """Download file based on URL type."""
-        if "drive.google.com" in url:
-            return await self._download_google_drive(url)
-        elif "mediafire.com" in url:
-            return await self._download_mediafire(url)
-        elif "mega.nz" in url:
-            return await self._download_mega(url)
-        else:
-            return await self._download_default(url, on_progress=on_progress)
+    async def _optimize_url(self, url: str) -> str:
+        """Optimize URL with best available mirrors."""
+        # Xiaomi mirror optimization
+        if "d.miui.com" in url:
+            return await self._optimize_xiaomi_url(url)
+
+        # Pixeldrain optimization
+        if "pixeldrain.com/u" in url:
+            file_id = url.split("/")[-1]
+            return f"https://pd.cybar.xyz/{file_id}"
+
+        if "pixeldrain.com/d" in url:
+            file_id = url.split("/")[-1]
+            return f"https://pixeldrain.com/api/filesystem/{file_id}"
+
+        return url
 
     async def _download_google_drive(self, url: str) -> str:
         """Download from Google Drive using gdown."""
@@ -247,4 +200,49 @@ class FirmwareDownloader:
 
         return str(latest_file)
 
+    async def _download_by_type(
+        self, url: str, on_progress: ProgressCallback | None = None
+    ) -> str:
+        """Download file based on URL type."""
+        if "drive.google.com" in url:
+            return await self._download_google_drive(url)
+        elif "mediafire.com" in url:
+            return await self._download_mediafire(url)
+        elif "mega.nz" in url:
+            return await self._download_mega(url)
+        else:
+            return await self._download_default(url, on_progress=on_progress)
 
+    async def download_firmware(
+        self,
+        job: DumpJob,
+        on_progress: ProgressCallback | None = None,
+    ) -> Tuple[str, str]:
+        """Download firmware and return (file_path, file_name).
+
+        Args:
+            job: The dump job containing URL and options.
+            on_progress: Optional async callback invoked with each DownloadProgress
+                         snapshot during aria2 RPC downloads.
+        """
+        url = str(job.dump_args.url)
+
+        # Check if it's a local file
+        if os.path.isfile(url):
+            console.print(f"[green]Found local file: {url}[/green]")
+            # Copy to work directory
+            file_name = Path(url).name
+            dest_path = self.work_dir / file_name
+            shutil.copy2(url, dest_path)
+            return str(dest_path), file_name
+
+        # Optimize URL with mirrors
+        optimized_url = await self._optimize_url(url)
+        console.print(f"[blue]Downloading from: {optimized_url}[/blue]")
+
+        # Download based on URL type
+        file_path = await self._download_by_type(optimized_url, on_progress=on_progress)
+        file_name = Path(file_path).name
+
+        console.print(f"[green]Downloaded: {file_name} ({get_file_size_formatted(file_path)})[/green]")
+        return file_path, file_name

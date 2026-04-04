@@ -30,22 +30,11 @@ def get_redis_settings():
     )
 
 
-def get_job_result_ttl(status: str) -> int:
-    """Get TTL for job result based on status."""
-    return WorkerSettings.result_ttl.get(status, WorkerSettings.result_ttl["running"])
-
-
 class WorkerSettings:
     """ARQ Worker Settings configuration."""
 
     # Redis connection (use same Redis as message queue)
     redis_settings = get_redis_settings()
-
-    # Job functions registered lazily to avoid import-time failures
-    @classmethod
-    def get_functions(cls):
-        from dumpyarabot.arq_jobs import process_firmware_dump
-        return [process_firmware_dump]
 
     # Worker configuration
     queue_name = f"{settings.REDIS_KEY_PREFIX}arq_jobs"
@@ -69,6 +58,17 @@ class WorkerSettings:
         "failed": 15 * 24 * 3600,     # 15 days
         "running": 7 * 24 * 3600,     # 7 days
     }
+
+    # Job functions registered lazily to avoid import-time failures
+    @classmethod
+    def get_functions(cls):
+        from dumpyarabot.arq_jobs import process_firmware_dump
+        return [process_firmware_dump]
+
+
+def get_job_result_ttl(status: str) -> int:
+    """Get TTL for job result based on status."""
+    return WorkerSettings.result_ttl.get(status, WorkerSettings.result_ttl["running"])
 
 
 class ARQPool:
