@@ -443,10 +443,17 @@ class MessageQueue:
                     console.print("[red]Document message missing content or filename; dropping malformed message without retry[/red]")
                     return True
 
+                document_bytes = base64.b64decode(message.document_content_b64)
+                console.print(
+                    f"[blue]Sending document '{message.document_filename}' "
+                    f"({len(document_bytes)} bytes) to chat {message.chat_id} "
+                    f"via {'custom API base URL' if settings.TELEGRAM_API_BASE_URL else 'default Telegram API'}[/blue]"
+                )
+
                 await self._bot.send_document(
                     chat_id=message.chat_id,
                     document=InputFile(
-                        io.BytesIO(base64.b64decode(message.document_content_b64)),
+                        io.BytesIO(document_bytes),
                         filename=message.document_filename,
                     ),
                     caption=message.caption,
@@ -520,10 +527,30 @@ class MessageQueue:
                 console.print("[yellow]Skipping no-op edit: message content is unchanged[/yellow]")
                 return True
 
+            if message.type == MessageType.DOCUMENT:
+                console.print(
+                    f"[red]Telegram sendDocument bad request for '{message.document_filename}' "
+                    f"to chat {message.chat_id}: {type(e).__name__}: {e}[/red]"
+                )
+                console.print_exception()
             console.print(f"[red]Telegram bad request processing message: {e}[/red]")
             return False
 
         except NetworkError as e:
+            if message.type == MessageType.DOCUMENT:
+                document_size = 0
+                if message.document_content_b64:
+                    try:
+                        document_size = len(base64.b64decode(message.document_content_b64))
+                    except Exception:
+                        pass
+                console.print(
+                    f"[yellow]sendDocument network error for '{message.document_filename}' "
+                    f"({document_size} bytes) to chat {message.chat_id} via "
+                    f"{'custom API base URL' if settings.TELEGRAM_API_BASE_URL else 'default Telegram API'}: "
+                    f"{type(e).__name__}: {e}[/yellow]"
+                )
+                console.print_exception()
             console.print(f"[yellow]Network error processing message: {e}[/yellow]")
             message.retry_count += 1
             if message.retry_count <= message.max_retries:
