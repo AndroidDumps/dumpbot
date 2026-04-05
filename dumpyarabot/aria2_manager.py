@@ -1,15 +1,26 @@
 """aria2 RPC manager for download operations with real-time progress tracking."""
 
 import asyncio
+import os
 import socket
+import subprocess
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import AsyncIterator
 
 import aria2p
 from rich.console import Console
+from dumpyarabot.process_utils import _register_process_for_current_job, _unregister_process_for_current_job
 
 console = Console()
+
+
+def _spawn_kwargs() -> dict:
+    """Create platform-appropriate subprocess kwargs for isolated process groups."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 @dataclass
@@ -97,6 +108,8 @@ class Aria2Manager:
         self.split = split
         self.max_connection_per_server = max_connection_per_server
         self._process: asyncio.subprocess.Process | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_lines: deque[str] = deque(maxlen=50)
         self._api: aria2p.API | None = None
         self._port: int | None = None
         self._secret: str = ""
@@ -105,6 +118,7 @@ class Aria2Manager:
         """Start the aria2c daemon with RPC enabled."""
         self._port = _find_free_port()
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self._stderr_lines.clear()
 
         cmd = [
             "aria2c",
@@ -126,14 +140,17 @@ class Aria2Manager:
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
+            **_spawn_kwargs(),
         )
+        await _register_process_for_current_job(self._process.pid)
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
 
         # Give aria2c a moment to bind
         await asyncio.sleep(0.5)
 
         if self._process.returncode is not None:
-            stderr = await self._process.stderr.read()
-            raise RuntimeError(f"aria2c daemon failed to start: {stderr.decode()}")
+            await self._process.wait()
+            raise RuntimeError(self._format_startup_error())
 
         self._api = aria2p.API(
             aria2p.Client(
@@ -147,6 +164,8 @@ class Aria2Manager:
 
     async def stop(self) -> None:
         """Shut down the aria2c daemon."""
+        aria2_pid = self._process.pid if self._process else None
+
         if self._api:
             try:
                 self._api.client.shutdown()
@@ -170,8 +189,40 @@ class Aria2Manager:
                     pass
             console.print("[yellow]aria2c daemon stopped[/yellow]")
 
+        if self._stderr_task:
+            try:
+                await self._stderr_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._stderr_task = None
+
         self._process = None
         self._port = None
+        self._stderr_lines.clear()
+        await _unregister_process_for_current_job(aria2_pid)
+
+    async def _drain_stderr(self) -> None:
+        """Continuously drain aria2c stderr and keep only the latest lines."""
+        if not self._process or not self._process.stderr:
+            return
+
+        try:
+            while True:
+                line = await self._process.stderr.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").rstrip()
+                if decoded:
+                    self._stderr_lines.append(decoded)
+        except Exception as e:
+            console.print(f"[yellow]Failed to read aria2c stderr: {e}[/yellow]")
+
+    def _format_startup_error(self) -> str:
+        """Build a startup failure message with the latest stderr context."""
+        if not self._stderr_lines:
+            return "aria2c daemon failed to start"
+        return "aria2c daemon failed to start: " + " | ".join(self._stderr_lines)
 
     async def download(
         self,

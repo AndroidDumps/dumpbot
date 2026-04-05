@@ -4,7 +4,7 @@ import sys
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
                           CommandHandler, MessageHandler, filters, JobQueue)
 
-from dumpyarabot.handlers import cancel_dump, dump, help_command, restart, status
+from dumpyarabot.handlers import cancel_dump, clear_queue, dump, help_command, restart, status
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.mockup_handlers import (handle_enhanced_callback_query,
                                          mockup_command)
@@ -92,6 +92,19 @@ async def _startup_init(application):
     await handle_post_restart_update(startup_context)
 
 
+async def _shutdown_runtime(application):
+    """Release runtime services after polling stops."""
+    try:
+        await message_queue.close()
+    except Exception:
+        pass
+    try:
+        from dumpyarabot.arq_config import shutdown_arq
+        await shutdown_arq()
+    except Exception:
+        pass
+
+
 async def register_bot_commands(application):
     """Register bot commands with Telegram for the menu interface."""
     from dumpyarabot.config import USER_COMMANDS
@@ -136,6 +149,7 @@ if __name__ == "__main__":
     # Restart handler - now fully implemented
     restart_handler = CommandHandler("restart", restart)
 
+    clearqueue_handler = CommandHandler("clearqueue", clear_queue)
 
     # Add all handlers
     application.add_handler(dump_handler)
@@ -148,8 +162,10 @@ if __name__ == "__main__":
     application.add_handler(request_message_handler)
     application.add_handler(callback_handler)
     application.add_handler(restart_handler)
+    application.add_handler(clearqueue_handler)
 
     application.post_init = _startup_init
+    application.post_shutdown = _shutdown_runtime
 
     application.run_polling()
 
@@ -158,7 +174,7 @@ if __name__ == "__main__":
         import asyncio
         async def _shutdown():
             try:
-                await message_queue.stop_consumer()
+                await message_queue.close()
             except Exception:
                 pass
             try:

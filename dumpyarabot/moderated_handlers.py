@@ -52,14 +52,30 @@ async def _create_status_message(
     pending_review: schemas.PendingReview,
     dump_args: schemas.DumpArguments,
     job_id: str,
-) -> int:
+) -> tuple[int, int, str]:
     """Create the bot-owned status message that later worker updates will edit."""
     primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else pending_review.review_chat_id
+    initial_text = _build_status_message_text(pending_review.url, dump_args, job_id)
 
+    status_message = await context.bot.send_message(
+        chat_id=primary_allowed_chat,
+        text=initial_text,
+        parse_mode=settings.DEFAULT_PARSE_MODE,
+        disable_web_page_preview=True,
+        reply_parameters=ReplyParameters(
+            message_id=pending_review.original_message_id,
+            chat_id=pending_review.original_chat_id,
+        ),
+    )
+    return status_message.message_id, primary_allowed_chat, initial_text
+
+
+def _build_status_message_text(url: str, dump_args: schemas.DumpArguments, job_id: str) -> str:
+    """Build the initial worker status message text."""
     if dump_args.use_privdump:
         initial_text = " *Private Dump Job Queued*\n\n"
     else:
-        initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{pending_review.url}`\n"
+        initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
 
     initial_text += f"*Job ID:* `{job_id}`\n"
 
@@ -77,18 +93,7 @@ async def _create_status_message(
     initial_text += " Queued for processing...\n\n"
     initial_text += "*Elapsed:* 0s\n"
     initial_text += " *Worker:* Waiting for assignment...\n"
-
-    status_message = await context.bot.send_message(
-        chat_id=primary_allowed_chat,
-        text=initial_text,
-        parse_mode=settings.DEFAULT_PARSE_MODE,
-        disable_web_page_preview=True,
-        reply_parameters=ReplyParameters(
-            message_id=pending_review.original_message_id,
-            chat_id=pending_review.original_chat_id,
-        ),
-    )
-    return status_message.message_id
+    return initial_text
 
 
 async def handle_request_message(
@@ -344,7 +349,7 @@ async def _handle_submit_callback(
         )
 
         job_id = secrets.token_hex(8)
-        status_message_id = await _create_status_message(
+        status_message_id, status_chat_id, queued_text = await _create_status_message(
             context,
             pending_review,
             dump_args,
@@ -357,11 +362,12 @@ async def _handle_submit_callback(
             dump_args=dump_args,
             created_at=datetime.now(timezone.utc),
             initial_message_id=status_message_id,
-            initial_chat_id=pending_review.original_chat_id
+            initial_chat_id=status_chat_id
         )
 
         # Create enhanced job data with metadata structure
         enhanced_job_data = job.model_dump()
+        enhanced_job_data["_queued_text"] = queued_text
         enhanced_job_data["metadata"] = {
             "telegram_context": {
                 "chat_id": pending_review.original_chat_id,
@@ -493,7 +499,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
         job_id = secrets.token_hex(8)
-        status_message_id = await _create_status_message(
+        status_message_id, status_chat_id, queued_text = await _create_status_message(
             context,
             pending_review,
             dump_args,
@@ -506,11 +512,12 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             dump_args=dump_args,
             created_at=datetime.now(timezone.utc),
             initial_message_id=status_message_id,
-            initial_chat_id=pending_review.original_chat_id
+            initial_chat_id=status_chat_id
         )
 
         # Create enhanced job data with metadata structure
         enhanced_job_data = job.model_dump()
+        enhanced_job_data["_queued_text"] = queued_text
         enhanced_job_data["metadata"] = {
             "telegram_context": {
                 "chat_id": pending_review.original_chat_id,
