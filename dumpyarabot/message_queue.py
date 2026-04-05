@@ -93,6 +93,7 @@ class MessageQueue:
         self._running = False
         self._bot: Optional[Bot] = None
         self._owns_bot = False
+        self._bot_shutdown_tasks: set[asyncio.Task] = set()
         self._last_edit_times: Dict[str, datetime] = {}  # Track edit times by message_id
 
     async def _get_redis(self) -> redis.Redis:
@@ -136,6 +137,25 @@ class MessageQueue:
         self._bot = bot
         self._owns_bot = True
         return bot
+
+    async def _shutdown_bot_instance(self, bot: Bot) -> None:
+        """Shut down a bot instance and release its underlying HTTP session."""
+        try:
+            await bot.shutdown()
+        except Exception as e:
+            console.print(f"[yellow]Failed to shut down owned bot: {e}[/yellow]")
+
+    def _schedule_bot_shutdown(self, bot: Bot) -> None:
+        """Schedule owned bot shutdown when synchronous replacement is required."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self._shutdown_bot_instance(bot))
+            return
+
+        task = loop.create_task(self._shutdown_bot_instance(bot))
+        self._bot_shutdown_tasks.add(task)
+        task.add_done_callback(self._bot_shutdown_tasks.discard)
 
     async def publish(self, message: QueuedMessage) -> str:
         """Publish a message to the appropriate priority queue and return message_id."""
@@ -365,8 +385,13 @@ class MessageQueue:
 
     def set_bot(self, bot: Bot) -> None:
         """Set the Telegram bot instance."""
+        previous_bot = self._bot
+        previous_owns_bot = self._owns_bot
         self._bot = bot
         self._owns_bot = False
+
+        if previous_owns_bot and previous_bot and previous_bot is not bot:
+            self._schedule_bot_shutdown(previous_bot)
 
     async def start_consumer(self) -> None:
         """Start the message consumer background task."""
@@ -387,7 +412,26 @@ class MessageQueue:
                 await self._consumer_task
             except asyncio.CancelledError:
                 pass
+            finally:
+                self._consumer_task = None
         console.print("[yellow]Message queue consumer stopped[/yellow]")
+
+    async def close(self) -> None:
+        """Release background tasks and any owned bot instance."""
+        await self.stop_consumer()
+
+        bot_to_close: Optional[Bot] = None
+        if self._owns_bot and self._bot is not None:
+            bot_to_close = self._bot
+
+        self._bot = None
+        self._owns_bot = False
+
+        if bot_to_close is not None:
+            await self._shutdown_bot_instance(bot_to_close)
+
+        if self._bot_shutdown_tasks:
+            await asyncio.gather(*self._bot_shutdown_tasks, return_exceptions=True)
 
     async def _consume_messages(self) -> None:
         """Main consumer loop that processes messages from Redis queues."""

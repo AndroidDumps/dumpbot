@@ -92,6 +92,19 @@ async def _startup_init(application):
     await handle_post_restart_update(startup_context)
 
 
+async def _shutdown_runtime(application):
+    """Release runtime services after polling stops."""
+    try:
+        await message_queue.close()
+    except Exception:
+        pass
+    try:
+        from dumpyarabot.arq_config import shutdown_arq
+        await shutdown_arq()
+    except Exception:
+        pass
+
+
 async def register_bot_commands(application):
     """Register bot commands with Telegram for the menu interface."""
     from dumpyarabot.config import USER_COMMANDS
@@ -152,6 +165,7 @@ if __name__ == "__main__":
     application.add_handler(clearqueue_handler)
 
     application.post_init = _startup_init
+    application.post_shutdown = _shutdown_runtime
 
     application.run_polling()
 
@@ -160,7 +174,7 @@ if __name__ == "__main__":
         import asyncio
         async def _shutdown():
             try:
-                await message_queue.stop_consumer()
+                await message_queue.close()
             except Exception:
                 pass
             try:
