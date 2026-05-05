@@ -404,10 +404,8 @@ class FirmwareExtractor:
             console.print(f"[yellow]Error extracting device trees: {e}[/yellow]")
             return
 
-        # Remove kernel directory if present
-        kernel_dir = dtb_dir / "00_kernel"
-        if kernel_dir.exists():
-            shutil.rmtree(kernel_dir)
+        # extract-dtb writes the kernel binary as 00_kernel alongside the dtbs
+        safe_remove_file(dtb_dir / "00_kernel")
 
         # Decompile DTBs to DTS
         dtb_files = list(dtb_dir.glob("*.dtb"))
