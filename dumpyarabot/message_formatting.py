@@ -569,9 +569,12 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
     return text
 
 
-async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["DumpJob"]) -> str:
+async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["DumpJob"], dlq_count: int = 0) -> str:
     """Format active and recent jobs overview."""
     text = " *Job Status Overview*\n\n"
+
+    if dlq_count > 0:
+        text += f" *Dead letter queue:* {dlq_count} failed message(s)\n\n"
 
     # Active jobs section
     if active_jobs:

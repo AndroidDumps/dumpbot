@@ -5,6 +5,7 @@ while preserving all Telegram messaging features and cross-chat functionality.
 """
 
 import asyncio
+import os
 import re
 import tempfile
 import traceback
@@ -22,6 +23,7 @@ from dumpyarabot.gitlab_manager import GitLabManager
 from dumpyarabot.schemas import DumpJob
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.property_extractor import PropertyExtractor
+from dumpyarabot.process_utils import reset_current_job_id, set_current_job_id
 from dumpyarabot.aria2_manager import DownloadProgress
 from dumpyarabot.message_formatting import format_comprehensive_progress_message, format_download_progress
 
@@ -139,6 +141,7 @@ async def _send_status_update(
 
     # Format the comprehensive progress message with metadata support
     formatted_message = await format_comprehensive_progress_message(job_data, message, progress, metadata)
+    await message_queue.store_latest_status_text(job_data["job_id"], formatted_message)
 
     # PRESERVE: Check for required message context (from original logic)
     initial_message_id = job_data.get("initial_message_id")
@@ -154,6 +157,7 @@ async def _send_status_update(
     # message in the primary allowed chat. Direct dumps should always edit in-place.
     dump_args_initial_message_id = job_data["dump_args"].get("initial_message_id")
     is_moderated_request = bool(job_data.get("metadata", {}).get("telegram_context", {}).get("moderated_request"))
+    original_chat_id = (job_data.get("metadata", {}).get("telegram_context", {}) or {}).get("chat_id", initial_chat_id)
 
     primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else None
 
@@ -164,7 +168,7 @@ async def _send_status_update(
             text=formatted_message,
             edit_message_id=initial_message_id,
             reply_to_message_id=dump_args_initial_message_id,
-            reply_to_chat_id=initial_chat_id,
+            reply_to_chat_id=original_chat_id,
             context={
                 "job_id": job_data["job_id"],
                 "worker_id": "arq_worker",
@@ -250,6 +254,7 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
             failure_progress,
             metadata,
         )
+        await message_queue.store_latest_status_text(job_data.get("job_id", "unknown"), formatted_message)
 
         # PRESERVE: Check for required message context
         initial_message_id = job_data.get("initial_message_id")
@@ -266,6 +271,7 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
         # status message in the primary allowed chat.
         dump_args_initial_message_id = job_data.get("dump_args", {}).get("initial_message_id")
         is_moderated_request = bool(job_data.get("metadata", {}).get("telegram_context", {}).get("moderated_request"))
+        original_chat_id = (job_data.get("metadata", {}).get("telegram_context", {}) or {}).get("chat_id", initial_chat_id)
 
         primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else None
 
@@ -276,7 +282,7 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
                 text=formatted_message,
                 edit_message_id=initial_message_id,
                 reply_to_message_id=dump_args_initial_message_id,
-                reply_to_chat_id=initial_chat_id,
+                reply_to_chat_id=original_chat_id,
                 context={"job_id": job_data.get("job_id", "unknown"), "type": "failure"}
             )
         else:
@@ -352,6 +358,7 @@ async def update_progress_with_metadata(
         "total_steps": 25
     }
 
+    await _raise_if_job_cancel_requested(job_data["job_id"])
     await _send_status_update(job_data, step, progress_data, metadata)
 
 
@@ -359,20 +366,43 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
     """ARQ job with integrated metadata tracking."""
     job_id = job_data["job_id"]
     console.print(f"[blue]ARQ processing job {job_id}[/blue]")
-
-    # Initialize metadata
-    job_data["metadata"] = job_data.get("metadata", {})
-    job_data["metadata"].update({
-        "start_time": datetime.now(timezone.utc).isoformat(),
-        "progress_history": [],
-        "status": "running"
-    })
-
-    # Add ARQ job metadata for tracking
-    job_data["arq_job_id"] = ctx.get('job_id')
-    job_data["worker_id"] = f"arq@{job_data['arq_job_id'][:8]}" if job_data["arq_job_id"] else "arq_worker"
+    job_token = None
+    from dumpyarabot.arq_config import arq_pool
 
     try:
+        # Initialize metadata
+        job_data["metadata"] = job_data.get("metadata", {})
+        job_data["metadata"].update({
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "progress_history": [],
+            "status": "running"
+        })
+
+        # Add ARQ job metadata for tracking
+        job_data["arq_job_id"] = ctx.get('job_id')
+        job_data["worker_id"] = f"arq@{job_data['arq_job_id'][:8]}" if job_data["arq_job_id"] else "arq_worker"
+
+        await arq_pool.register_running_job(job_id, job_data["worker_id"], os.getpid())
+        await arq_pool.clear_job_cancel_request(job_id)
+        job_token = set_current_job_id(job_id)
+
+        # Verify Telegram context before doing any heavy work.
+        # If the bot can no longer reach the initial message (blocked, deleted, etc.)
+        # there is no point running a 2-hour job that nobody can monitor.
+        try:
+            await message_queue.verify_telegram_context(job_data)
+        except Exception as e:
+            console.print(f"[red]Job {job_id}: aborting early - {e}[/red]")
+            job_data["metadata"].update({
+                "status": "failed",
+                "end_time": datetime.now(timezone.utc).isoformat(),
+                "error_context": {"message": str(e), "current_step": "Telegram verification"},
+            })
+            # Do not queue a failure notification from this early-return path.
+            # Preflight failures can include Telegram reachability problems or
+            # transient Redis/bot initialization failures before normal job setup.
+            return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+
         # Create temporary work directory
         with tempfile.TemporaryDirectory(prefix=f"dump_{job_id}_") as temp_dir:
             work_dir = Path(temp_dir)
@@ -380,6 +410,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
             try:
                 # Initialize components (exact same as original)
+                await _raise_if_job_cancel_requested(job_id)
                 downloader = FirmwareDownloader(str(work_dir))
                 extractor = FirmwareExtractor(str(work_dir))
                 prop_extractor = PropertyExtractor(str(work_dir))
@@ -403,7 +434,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 dump_job = DumpJob.model_validate(job_data)
 
                 # Download with live progress via aria2 RPC callback.
-                # Download progress is mapped into the 15%–50% band of overall job progress.
+                # Download progress is mapped into the 15%-50% band of overall job progress.
                 async def _on_download_progress(dp: DownloadProgress) -> None:
                     dl_pct = dp.percentage  # 0-100 within download
                     overall_pct = 15.0 + (dl_pct / 100.0) * 35.0  # map to 15%-50%
@@ -528,6 +559,18 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "metadata": job_data["metadata"]
                 }
 
+            except JobCancelledError as e:
+                job_data["metadata"].update({
+                    "status": "cancelled",
+                    "end_time": datetime.now(timezone.utc).isoformat(),
+                    "error_context": {
+                        "message": str(e),
+                        "current_step": "Cancellation requested",
+                        "failure_time": datetime.now(timezone.utc).isoformat(),
+                    }
+                })
+                await _send_failure_notification(job_data, str(e))
+                return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
             except Exception as e:
                 console.print(f"[red]Error in inner processing for job {job_id}: {e}[/red]")
 
@@ -583,3 +626,19 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             console.print(f"[red]Failed to send failure notification: {notification_error}[/red]")
 
         return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+    finally:
+        if job_token is not None:
+            reset_current_job_id(job_token)
+        await arq_pool.clear_running_job(job_id)
+        await arq_pool.clear_job_processes(job_id)
+        await arq_pool.clear_job_cancel_request(job_id)
+class JobCancelledError(Exception):
+    """Raised when a cooperative cancellation request is detected."""
+
+
+async def _raise_if_job_cancel_requested(job_id: str) -> None:
+    """Abort the current job if a cooperative cancellation was requested."""
+    from dumpyarabot.arq_config import arq_pool
+
+    if await arq_pool.is_job_cancel_requested(job_id):
+        raise JobCancelledError(f"Job {job_id} was cancelled")

@@ -1,13 +1,59 @@
 """Process utilities for running external commands with standardized error handling."""
 
 import asyncio
+import contextvars
 import os
+import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, Dict, Any
 
 from rich.console import Console
 
 console = Console()
+_current_job_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("current_job_id", default=None)
+
+
+def _subprocess_spawn_kwargs() -> Dict[str, Any]:
+    """Create platform-appropriate subprocess spawn kwargs for isolated process groups."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def set_current_job_id(job_id: Optional[str]) -> contextvars.Token:
+    """Set the current job id for subprocess registration."""
+    return _current_job_id.set(job_id)
+
+
+def reset_current_job_id(token: contextvars.Token) -> None:
+    """Restore the previous current job id."""
+    _current_job_id.reset(token)
+
+
+async def _register_process_for_current_job(pid: Optional[int]) -> None:
+    """Associate a spawned subprocess PID with the active job, if any."""
+    job_id = _current_job_id.get()
+    if not job_id or pid is None:
+        return
+
+    try:
+        from dumpyarabot.arq_config import arq_pool
+        await arq_pool.register_job_process(job_id, pid)
+    except Exception as e:
+        console.print(f"[yellow]Could not register subprocess {pid} for job {job_id}: {e}[/yellow]")
+
+
+async def _unregister_process_for_current_job(pid: Optional[int]) -> None:
+    """Disassociate a subprocess PID from the active job, if any."""
+    job_id = _current_job_id.get()
+    if not job_id or pid is None:
+        return
+
+    try:
+        from dumpyarabot.arq_config import arq_pool
+        await arq_pool.unregister_job_process(job_id, pid)
+    except Exception as e:
+        console.print(f"[yellow]Could not unregister subprocess {pid} for job {job_id}: {e}[/yellow]")
 
 
 class ProcessResult:
@@ -92,7 +138,9 @@ async def run_command(
             stdout=stdout_redirect,
             stderr=stderr_redirect,
             env=process_env,
+            **_subprocess_spawn_kwargs(),
         )
+        await _register_process_for_current_job(process.pid)
 
         # Wait for completion with timeout
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -175,6 +223,9 @@ async def run_command(
             stderr=str(e),
             command=command,
         )
+    finally:
+        if process is not None:
+            await _unregister_process_for_current_job(process.pid)
 
 
 async def run_command_with_file_output(
@@ -203,6 +254,7 @@ async def run_command_with_file_output(
     """
     command = list(args)
     log_desc = description or f"Running {command[0]}"
+    process = None
 
     if not quiet:
         console.print(f"[blue]{log_desc} (output to {output_file})...[/blue]")
@@ -222,7 +274,9 @@ async def run_command_with_file_output(
                 stdout=output_f,
                 stderr=asyncio.subprocess.PIPE,
                 env=process_env,
+                **_subprocess_spawn_kwargs(),
             )
+            await _register_process_for_current_job(process.pid)
 
             # Wait for completion with timeout
             _, stderr_bytes = await asyncio.wait_for(
@@ -267,7 +321,6 @@ async def run_command_with_file_output(
             console.print(f"[red]{log_desc} timed out after {timeout}s[/red]")
 
         return result
-
     except Exception as e:
         if not quiet:
             console.print(f"[red]{log_desc} failed with exception: {e}[/red]")
@@ -277,6 +330,9 @@ async def run_command_with_file_output(
             stderr=str(e),
             command=command,
         )
+    finally:
+        if process is not None:
+            await _unregister_process_for_current_job(process.pid)
 
 
 # Specialized command runners for common tools

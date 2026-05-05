@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # Redis configuration for persistent storage
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_KEY_PREFIX: str = "dumpyarabot:"
+    ARQ_MAX_JOBS: int = 1
 
     # Telegram formatting configuration
     DEFAULT_PARSE_MODE: str = "Markdown"
@@ -61,6 +62,7 @@ INTERNAL_COMMANDS = [
 
 ADMIN_COMMANDS = [
     ("restart", "Restart the bot"),
+    ("clearqueue", "Flush all queued (not yet running) jobs"),
 ]
 
 EMPTY_COMMANDS = []

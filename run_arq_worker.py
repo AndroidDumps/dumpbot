@@ -20,8 +20,11 @@ from typing import Optional
 
 import arq
 from rich.console import Console
+from telegram import Bot
 
 from dumpyarabot.arq_config import WorkerSettings, shutdown_arq
+from dumpyarabot.config import settings as _settings
+from dumpyarabot.message_queue import message_queue
 
 console = Console()
 
@@ -32,6 +35,7 @@ class ARQWorkerManager:
     def __init__(self, worker_name: Optional[str] = None):
         self.worker_name = worker_name or "arq_worker"
         self.worker: Optional[arq.Worker] = None
+        self.bot: Optional[Bot] = None
         self.shutdown_event = asyncio.Event()
 
     async def start_worker(self):
@@ -54,6 +58,15 @@ class ARQWorkerManager:
 
             # Set up signal handlers for graceful shutdown
             self._setup_signal_handlers()
+
+            bot_kwargs = {"token": _settings.TELEGRAM_BOT_TOKEN}
+            if _settings.TELEGRAM_API_BASE_URL:
+                base = _settings.TELEGRAM_API_BASE_URL.rstrip("/")
+                bot_kwargs["base_url"] = f"{base}/bot"
+                bot_kwargs["base_file_url"] = f"{base}/file/bot"
+            self.bot = Bot(**bot_kwargs)
+            await self.bot.initialize()
+            message_queue.set_bot(self.bot)
 
             console.print(f"[blue]Worker {self.worker_name} started and waiting for jobs...[/blue]")
 
@@ -104,6 +117,12 @@ class ARQWorkerManager:
 
         if self.worker:
             await self.worker.close()
+
+        if self.bot:
+            try:
+                await self.bot.shutdown()
+            except Exception:
+                pass
 
         await shutdown_arq()
         console.print(f"[green]Worker {self.worker_name} shutdown complete[/green]")

@@ -52,6 +52,16 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"   # Job was cancelled by user/admin
 
 
+class JobCancelResult(str, Enum):
+    """Outcome of a cancellation request."""
+    NOT_FOUND = "not_found"
+    CANCELLED = "cancelled"
+    FORCE_KILLED = "force_killed"
+    CANCELLING = "cancelling"
+    TIMED_OUT = "timed_out"
+    FAILED = "failed"
+
+
 class JobProgress(BaseModel):
     """Progress information for a dump job."""
     current_step: str
