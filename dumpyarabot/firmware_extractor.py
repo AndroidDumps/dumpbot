@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 from rich.console import Console
 
 from dumpyarabot.schemas import DumpJob
-from dumpyarabot.process_utils import run_command, run_extraction_command, run_git_command, run_analysis_command
+from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_command, run_extraction_command, run_git_command, run_analysis_command
 from dumpyarabot.file_utils import find_files_by_pattern, move_file_to_root, safe_remove_file
 
 console = Console()
@@ -33,7 +33,7 @@ class FirmwareExtractor:
         result = await run_command(
             "uvx", "dumpyara", firmware_path, "-o", str(self.work_dir),
             cwd=self.work_dir,
-            timeout=600.0,
+            timeout=ONE_HOUR,
             check=True,
             description="Python dumper extraction"
         )
@@ -52,7 +52,7 @@ class FirmwareExtractor:
         result = await run_command(
             "bash", str(extractor_script), firmware_path, str(self.work_dir),
             cwd=self.work_dir,
-            timeout=600.0,
+            timeout=ONE_HOUR,
             check=True,
             description="Alternative dumper extraction"
         )
@@ -65,16 +65,19 @@ class FirmwareExtractor:
 
     async def _setup_firmware_extractor(self):
         """Clone or update the Firmware_extractor repository."""
+        # Network + HDD I/O can be slow; bound generously rather than the 30s default.
         if not self.firmware_extractor_path.exists():
             await run_git_command(
                 "clone", "-q",
                 "https://github.com/AndroidDumps/Firmware_extractor",
                 str(self.firmware_extractor_path),
+                timeout=HALF_HOUR,
                 description="Cloning Firmware_extractor"
             )
         else:
             await run_git_command(
                 "-C", str(self.firmware_extractor_path), "pull", "-q", "--rebase",
+                timeout=HALF_HOUR,
                 description="Updating Firmware_extractor"
             )
 

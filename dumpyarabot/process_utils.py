@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import os
+import signal
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, Dict, Any
@@ -12,12 +13,37 @@ from rich.console import Console
 console = Console()
 _current_job_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("current_job_id", default=None)
 
+# Common timeout durations in seconds, for use as `timeout=` arguments.
+FIVE_MINUTES = 300.0
+HALF_HOUR = 1800.0
+ONE_HOUR = 3600.0
+
 
 def _subprocess_spawn_kwargs() -> Dict[str, Any]:
     """Create platform-appropriate subprocess spawn kwargs for isolated process groups."""
     if os.name == "nt":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     return {"start_new_session": True}
+
+
+def _kill_process_tree(process: Optional[asyncio.subprocess.Process]) -> None:
+    """SIGKILL the subprocess and any descendants in its session/process group.
+
+    Plain process.kill() only signals the immediate child, leaking grandchildren
+    (e.g. ssh spawned by git push) on long-running ops.
+    """
+    if process is None or process.returncode is not None:
+        return
+    pid = process.pid
+    if pid is None:
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
 
 
 def set_current_job_id(job_id: Optional[str]) -> contextvars.Token:
@@ -177,9 +203,9 @@ async def run_command(
         return result
 
     except asyncio.TimeoutError:
-        # Kill the process if it's still running
+        # Kill the whole process tree if it's still running
         if process.returncode is None:
-            process.kill()
+            _kill_process_tree(process)
             await process.wait()
 
         result = ProcessResult(
@@ -200,7 +226,7 @@ async def run_command(
 
     except asyncio.CancelledError:
         if process and process.returncode is None:
-            process.kill()
+            _kill_process_tree(process)
             try:
                 await process.wait()
             except Exception:
@@ -305,9 +331,9 @@ async def run_command_with_file_output(
         return result
 
     except asyncio.TimeoutError:
-        # Kill the process if it's still running
+        # Kill the whole process tree if it's still running
         if process.returncode is None:
-            process.kill()
+            _kill_process_tree(process)
             await process.wait()
 
         result = ProcessResult(
@@ -358,7 +384,7 @@ async def run_extraction_command(
     tool: str,
     *args: str,
     cwd: Optional[Union[str, Path]] = None,
-    timeout: float = 300.0,
+    timeout: float = 600.0,
     quiet: bool = True,
     description: Optional[str] = None,
 ) -> ProcessResult:

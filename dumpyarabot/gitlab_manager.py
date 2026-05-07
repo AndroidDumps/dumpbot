@@ -7,7 +7,7 @@ from rich.console import Console
 
 from dumpyarabot.config import settings
 from dumpyarabot.utils import escape_markdown
-from dumpyarabot.process_utils import run_git_command
+from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_git_command
 from dumpyarabot.message_formatting import format_channel_notification_message
 
 console = Console()
@@ -189,6 +189,7 @@ class GitLabManager:
         await run_git_command(
             "add", "--ignore-errors", "-A",
             cwd=self.work_dir,
+            timeout=ONE_HOUR,
             description="Adding files to git"
         )
 
@@ -197,6 +198,7 @@ class GitLabManager:
         await run_git_command(
             "commit", "--quiet", "--signoff", "--message", description,
             cwd=self.work_dir,
+            timeout=HALF_HOUR,
             description="Committing files"
         )
 
@@ -225,7 +227,7 @@ class GitLabManager:
         await run_git_command(
             *push_args,
             cwd=self.work_dir,
-            timeout=120.0,
+            timeout=ONE_HOUR,
             description="Pushing to GitLab"
         )
 
