@@ -6,7 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str
 
-
     SUDO_USERS: list[int] = []
 
     ALLOWED_CHATS: list[int] = []
@@ -31,8 +30,10 @@ class Settings(BaseSettings):
     # Default: https://api.telegram.org/bot
     TELEGRAM_API_BASE_URL: Optional[str] = None
 
+    # Gitlab API Token
+    DUMPER_TOKEN: str
 
-    model_config = SettingsConfigDict(env_file=".env", extra='ignore')
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
@@ -50,14 +51,14 @@ CALLBACK_CANCEL_REQUEST = "cancel_req_"
 # Bot command definitions for Telegram menu
 USER_COMMANDS = [
     ("dump", "Start a firmware dump with URL and options"),
-    ("help", "Show available commands and usage")
+    ("help", "Show available commands and usage"),
 ]
 
 INTERNAL_COMMANDS = [
     ("cancel", "Cancel a running dump job"),
     ("accept", "Accept a pending dump request"),
     ("reject", "Reject a pending dump request"),
-    ("mockup", "Test the moderated request flow")
+    ("mockup", "Test the moderated request flow"),
 ]
 
 ADMIN_COMMANDS = [
