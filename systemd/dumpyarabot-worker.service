@@ -9,6 +9,10 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=/var/lib/jenkins/dumpbot
+# systemd user services start with a minimal PATH that excludes ~/.cargo/bin
+# and ~/.local/bin. The worker shells out to `uvx`, `aria2c`, `7zz`, etc. —
+# uvx in particular lives in ~/.cargo/bin/ for jenkins.
+Environment=PATH=/var/lib/jenkins/.cargo/bin:/var/lib/jenkins/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python run_arq_worker.py
 Restart=on-failure
 RestartSec=10
