@@ -554,11 +554,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Step 15: Setting up git repository (74%)
                 await update_progress_with_metadata(job_data, " Creating GitLab repository...", 74.0)
 
-                # Get DUMPER_TOKEN from environment or settings
-                dumper_token = getattr(settings, 'DUMPER_TOKEN', None)
-                if not dumper_token:
-                    raise Exception("DUMPER_TOKEN not configured")
-
                 # Use periodic timer for GitLab operation (longest post-download operation)
                 gitlab_progress = {
                     "current_step": "GitLab",
@@ -569,7 +564,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 async with PeriodicTimerUpdate(job_data, " Creating GitLab repository...", gitlab_progress):
                     repo_url, repo_path = await gitlab_manager.create_and_push_repository(
                         device_props,
-                        dumper_token,
+                        settings.DUMPER_TOKEN,
                         force=job_data["dump_args"].get("force", False),
                     )
 
@@ -579,17 +574,14 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Step 17: Sending notification (92%)
                 await update_progress_with_metadata(job_data, " Sending channel notification...", 92.0)
 
-                # Get API_KEY from environment or settings for channel notification
-                api_key = getattr(settings, 'API_KEY', None)
-                if api_key:
-                    await gitlab_manager.send_channel_notification(
-                        device_props,
-                        repo_url,
-                        str(job_data["dump_args"]["url"]),
-                        is_whitelisted,
-                        job_data.get("add_blacklist", False),
-                        api_key
-                    )
+                await gitlab_manager.send_channel_notification(
+                    device_props,
+                    repo_url,
+                    str(job_data["dump_args"]["url"]),
+                    is_whitelisted,
+                    job_data.get("add_blacklist", False),
+                    settings.TELEGRAM_BOT_TOKEN,
+                )
 
                 # On successful completion
                 repo_info = {"url": repo_url, "path": repo_path}
@@ -622,7 +614,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 console.print(f"[red]Error in inner processing for job {job_id}: {e}[/red]")
 
                 # Enhanced error handling
-                progress = job_data.get("progress") or {}
                 metadata = job_data.get("metadata") or {}
                 progress_history = metadata.get("progress_history") or []
 

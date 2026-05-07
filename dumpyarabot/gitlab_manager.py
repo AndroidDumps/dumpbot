@@ -1,14 +1,13 @@
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Tuple
 from urllib.parse import urlparse
 
 import httpx
 from rich.console import Console
 
 from dumpyarabot.config import settings
-from dumpyarabot.utils import escape_markdown
-from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_git_command
 from dumpyarabot.message_formatting import format_channel_notification_message
+from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_git_command
 
 console = Console()
 
@@ -262,18 +261,19 @@ class GitLabManager:
         download_url: str,
         is_whitelisted: bool,
         add_blacklist: bool,
-        api_key: str
+        api_key: str,
     ) -> None:
         """Send notification to Telegram channel."""
-        if not (is_whitelisted and not add_blacklist):
-            console.print("[blue]Skipping channel notification (not whitelisted or blacklisted)[/blue]")
-            return
-
         console.print("[blue]Sending channel notification...[/blue]")
+        include_download_url = is_whitelisted and not add_blacklist
+        if include_download_url:
+            console.print("[blue]Including firmware link in channel notification[/blue]")
+        else:
+            console.print("[blue]Sending channel notification without firmware link[/blue]")
 
         # Build notification message using utility function
         message = format_channel_notification_message(
-            device_props, repo_url, download_url
+            device_props, repo_url, download_url if include_download_url else None
         )
 
         # Send to channel via Telegram API (use custom base URL if configured)
@@ -289,9 +289,9 @@ class GitLabManager:
                     "text": message,
                     "chat_id": "@android_dumps",
                     "parse_mode": settings.DEFAULT_PARSE_MODE,
-                    "disable_web_page_preview": True
+                    "disable_web_page_preview": True,
                 },
-                timeout=30.0
+                timeout=30.0,
             )
 
             if response.status_code == 200:
