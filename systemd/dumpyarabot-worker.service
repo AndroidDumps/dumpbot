@@ -1,7 +1,7 @@
 [Unit]
 Description=Dumpyarabot ARQ worker
-After=network-online.target redis.service
-Wants=network-online.target
+After=network-online.target dumpyarabot-redis.service
+Wants=network-online.target dumpyarabot-redis.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

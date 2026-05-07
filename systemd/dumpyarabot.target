@@ -1,7 +1,7 @@
 [Unit]
-Description=Dumpyarabot bot + worker
-Wants=dumpyarabot-bot.service dumpyarabot-worker.service
-After=dumpyarabot-bot.service dumpyarabot-worker.service
+Description=Dumpyarabot redis + bot + worker
+Wants=dumpyarabot-redis.service dumpyarabot-bot.service dumpyarabot-worker.service
+After=dumpyarabot-redis.service dumpyarabot-bot.service dumpyarabot-worker.service
 
 [Install]
 WantedBy=multi-user.target
