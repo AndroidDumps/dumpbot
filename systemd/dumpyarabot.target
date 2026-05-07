@@ -1,0 +1,7 @@
+[Unit]
+Description=Dumpyarabot bot + worker
+Wants=dumpyarabot-bot.service dumpyarabot-worker.service
+After=dumpyarabot-bot.service dumpyarabot-worker.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Dumpyarabot ARQ worker
+After=network-online.target redis.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jenkins
+Group=jenkins
+WorkingDirectory=/var/lib/jenkins/dumpbot
+ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python run_arq_worker.py
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+# Worker's job_timeout is 7200s (2h). Give it that plus a minute of grace
+# so systemd lets an in-flight dump drain on SIGTERM instead of SIGKILLing
+# mid-extraction.
+TimeoutStopSec=7260
+
+[Install]
+WantedBy=multi-user.target
