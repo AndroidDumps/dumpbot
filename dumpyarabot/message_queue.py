@@ -110,16 +110,70 @@ class MessageQueue:
         """Create Redis key for the latest rendered Telegram status text."""
         return f"{settings.REDIS_KEY_PREFIX}job_status_text:{job_id}"
 
-    async def store_latest_status_text(self, job_id: str, text: str, ttl_seconds: int = 15 * 24 * 3600) -> None:
+    async def store_latest_status_text(
+        self,
+        job_id: str,
+        text: str,
+        ttl_seconds: int = 15 * 24 * 3600,
+        sequence: Optional[float] = None,
+        timestamp: Optional[float] = None
+    ) -> None:
         """Persist the latest rendered status text so retries can preserve display state."""
         redis_client = await self._get_redis()
-        await redis_client.set(self._make_status_text_key(job_id), text, ex=ttl_seconds)
+        if sequence is None:
+            sequence = 0.0
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc).timestamp()
+
+        value = f"v1\n{float(sequence)}\n{float(timestamp)}\n{text}"
+        await redis_client.eval(
+            """
+            local current = redis.call('GET', KEYS[1])
+            local next_seq = tonumber(ARGV[1])
+            local next_ts = tonumber(ARGV[2])
+            local ttl = tonumber(ARGV[3])
+
+            local current_seq = nil
+            local current_ts = nil
+            if current and string.sub(current, 1, 3) == "v1\\n" then
+                local rest = string.sub(current, 4)
+                local first_newline = string.find(rest, "\\n", 1, true)
+                if first_newline then
+                    current_seq = tonumber(string.sub(rest, 1, first_newline - 1))
+                    local rest_after_seq = string.sub(rest, first_newline + 1)
+                    local second_newline = string.find(rest_after_seq, "\\n", 1, true)
+                    if second_newline then
+                        current_ts = tonumber(string.sub(rest_after_seq, 1, second_newline - 1))
+                    end
+                end
+            end
+
+            if not current_seq or next_seq > current_seq or (next_seq == current_seq and (not current_ts or next_ts >= current_ts)) then
+                redis.call('SET', KEYS[1], ARGV[4], 'EX', ttl)
+                return 1
+            end
+            return 0
+            """,
+            1,
+            self._make_status_text_key(job_id),
+            float(sequence),
+            float(timestamp),
+            int(ttl_seconds),
+            value,
+        )
 
     async def get_latest_status_text(self, job_id: str) -> Optional[str]:
         """Fetch the latest rendered status text for a job."""
         redis_client = await self._get_redis()
         value = await redis_client.get(self._make_status_text_key(job_id))
-        return str(value) if value is not None else None
+        if value is None:
+            return None
+        value = str(value)
+        if value.startswith("v1\n"):
+            parts = value.split("\n", 3)
+            if len(parts) == 4:
+                return parts[3]
+        return value
 
     async def _ensure_bot(self) -> Bot:
         """Return a usable Telegram bot instance, creating one if needed."""

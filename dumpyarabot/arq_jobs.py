@@ -126,22 +126,59 @@ class PeriodicTimerUpdate:
             while self.running:
                 await asyncio.sleep(self.interval)
                 if self.running:  # Check again after sleep
-                    await _send_status_update(self.job_data, self.message, self.progress, self.job_data.get("metadata"))
+                    if not self._has_recent_status_activity():
+                        await _send_status_update(
+                            self.job_data,
+                            self.message,
+                            self.progress,
+                            self.job_data.get("metadata"),
+                            record_activity=False,
+                        )
         except asyncio.CancelledError:
             pass
+
+    def _has_recent_status_activity(self) -> bool:
+        """Return whether a non-periodic status update was sent within this interval."""
+        last_activity = self.job_data.get("_last_status_activity_at")
+        if last_activity is None:
+            return False
+        try:
+            elapsed = datetime.now(timezone.utc).timestamp() - float(last_activity)
+        except (TypeError, ValueError):
+            return False
+        return elapsed < self.interval
+
+
+def _status_update_sequence(progress: Optional[Dict[str, Any]]) -> float:
+    """Return the monotonic ordering key for the latest rendered job status."""
+    if progress:
+        try:
+            return float(progress.get("percentage", 0.0))
+        except (TypeError, ValueError):
+            pass
+    return 0.0
 
 
 async def _send_status_update(
     job_data: Dict[str, Any],
     message: str,
     progress: Optional[Dict[str, Any]] = None,
-    metadata: Optional[Dict[str, Any]] = None  # NEW parameter
+    metadata: Optional[Dict[str, Any]] = None,
+    record_activity: bool = True
 ) -> None:
     """Send a status update message using the existing message queue - PRESERVING ALL TELEGRAM FEATURES."""
 
+    status_timestamp = datetime.now(timezone.utc).timestamp()
+    status_sequence = _status_update_sequence(progress)
+
     # Format the comprehensive progress message with metadata support
     formatted_message = await format_comprehensive_progress_message(job_data, message, progress, metadata)
-    await message_queue.store_latest_status_text(job_data["job_id"], formatted_message)
+    await message_queue.store_latest_status_text(
+        job_data["job_id"],
+        formatted_message,
+        sequence=status_sequence,
+        timestamp=status_timestamp,
+    )
 
     # PRESERVE: Check for required message context (from original logic)
     initial_message_id = job_data.get("initial_message_id")
@@ -175,6 +212,8 @@ async def _send_status_update(
                 "progress": progress
             }
         )
+        if record_activity:
+            job_data["_last_status_activity_at"] = status_timestamp
     else:
         # Same-chat update - edit the initial message
         await message_queue.send_status_update(
@@ -188,6 +227,8 @@ async def _send_status_update(
                 "progress": progress
             }
         )
+        if record_activity:
+            job_data["_last_status_activity_at"] = status_timestamp
 
 
 def _build_failure_log_text(job_data: Dict[str, Any]) -> str:
@@ -254,7 +295,13 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
             failure_progress,
             metadata,
         )
-        await message_queue.store_latest_status_text(job_data.get("job_id", "unknown"), formatted_message)
+        status_timestamp = datetime.now(timezone.utc).timestamp()
+        await message_queue.store_latest_status_text(
+            job_data.get("job_id", "unknown"),
+            formatted_message,
+            sequence=_status_update_sequence(failure_progress),
+            timestamp=status_timestamp,
+        )
 
         # PRESERVE: Check for required message context
         initial_message_id = job_data.get("initial_message_id")
