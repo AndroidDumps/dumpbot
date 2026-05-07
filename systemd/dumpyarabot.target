@@ -4,4 +4,4 @@ Wants=dumpyarabot-redis.service dumpyarabot-bot.service dumpyarabot-worker.servi
 After=dumpyarabot-redis.service dumpyarabot-bot.service dumpyarabot-worker.service
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

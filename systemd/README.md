@@ -1,7 +1,8 @@
-# systemd units
+# systemd units (user mode)
 
-Run dumpyarabot under systemd so that `git pull && systemctl restart dumpyarabot.target`
-reloads the bot and worker together.
+Run dumpyarabot's redis, bot, and worker under the **jenkins user's** systemd
+manager so `git pull && systemctl --user restart dumpyarabot.target` reloads
+everything with no sudo.
 
 ## Layout
 
@@ -14,48 +15,58 @@ reloads the bot and worker together.
 The units assume:
 
 - Code lives at `/var/lib/jenkins/dumpbot`.
-- The runtime user is `jenkins`.
 - A uv-managed venv exists at `/var/lib/jenkins/dumpbot/.venv` (`uv sync` creates it).
 - A `.env` file in the working directory provides `TELEGRAM_BOT_TOKEN`,
   `DUMPER_TOKEN`, `REDIS_URL`, etc. (pydantic-settings reads it from cwd).
   `REDIS_URL` should point at `redis://127.0.0.1:34790/0` to match `redis.conf`.
-- A redis data directory at `/var/lib/jenkins/dumpbot-redis`, owned by jenkins.
+- A redis data directory at `/var/lib/jenkins/dumpbot-redis`.
 
-If any of those differ on your box, edit the units / `redis.conf` before installing.
+If any of those differ, edit the units / `redis.conf` before installing.
 
-## Install
+## One-time setup
+
+The only step that needs root is enabling lingering, so the jenkins user
+manager runs without a login session and survives reboot:
 
 ```sh
-# One-time: create the redis data directory
-sudo install -d -o jenkins -g jenkins -m 0750 /var/lib/jenkins/dumpbot-redis
-
-# Drop the units in place
-sudo cp systemd/dumpyarabot-redis.service /etc/systemd/system/
-sudo cp systemd/dumpyarabot-bot.service /etc/systemd/system/
-sudo cp systemd/dumpyarabot-worker.service /etc/systemd/system/
-sudo cp systemd/dumpyarabot.target /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now dumpyarabot.target
+sudo loginctl enable-linger jenkins
 ```
+
+Everything else runs as the `jenkins` user — there's a script for it:
+
+```sh
+sudo -iu jenkins /var/lib/jenkins/dumpbot/systemd/setup.sh
+```
+
+`setup.sh` is idempotent: it creates `/var/lib/jenkins/dumpbot-redis`, symlinks
+the four unit files into `~jenkins/.config/systemd/user/`, runs
+`systemctl --user daemon-reload`, and `enable --now`s the target. Re-run it
+after pulling unit-file changes from the repo.
 
 ## Reload after `git pull`
 
+From a jenkins shell, no sudo:
+
 ```sh
 git -C /var/lib/jenkins/dumpbot pull --ff-only
-sudo systemctl restart dumpyarabot.target
+systemctl --user daemon-reload   # only needed if a unit file actually changed
+systemctl --user restart dumpyarabot.target
 ```
 
-The worker carries `TimeoutStopSec=7260` (2h + 1min) so a SIGTERM during a
-running dump waits for the job to finish or hit its `job_timeout` rather than
-killing extraction mid-flight. The bot's stop timeout is 30s — it has no
-long-lived in-process work.
+The worker carries `TimeoutStopSec=7260` (2h + 1min). On SIGTERM the worker
+propagates a `CancelledError` into the running job, which lets `process_utils`
+clean up its subprocess tree (`_kill_process_tree` SIGKILLs the session) and
+report a graceful failure to Telegram instead of being SIGKILLed at an
+arbitrary point. The 7260s ceiling matches arq's `job_timeout = 7200s` plus a
+minute of grace, so even a job that stalls during cancellation shutdown gets
+a fair window. The bot/redis use 30s.
 
 ## Logs
 
 ```sh
-journalctl -u dumpyarabot-redis.service -f
-journalctl -u dumpyarabot-bot.service -f
-journalctl -u dumpyarabot-worker.service -f
+journalctl --user -u dumpyarabot-redis.service -f
+journalctl --user -u dumpyarabot-bot.service -f
+journalctl --user -u dumpyarabot-worker.service -f
 ```
 
 ## Multiple workers
@@ -63,5 +74,5 @@ journalctl -u dumpyarabot-worker.service -f
 The unit runs a single worker process. ARQ's `ARQ_MAX_JOBS=1` means each worker
 handles one dump at a time, but you can run several workers in parallel by
 copying the unit to `dumpyarabot-worker@.service` (a template) and starting
-instances like `systemctl start dumpyarabot-worker@1.service`. Add those
+instances like `systemctl --user start dumpyarabot-worker@1.service`. Add those
 instances to `dumpyarabot.target`'s `Wants=` list if you want them grouped.

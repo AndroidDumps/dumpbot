@@ -1,13 +1,11 @@
 [Unit]
 Description=Redis for dumpyarabot (port 34790)
-After=network.target
+PartOf=dumpyarabot.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=jenkins
-Group=jenkins
 WorkingDirectory=/var/lib/jenkins/dumpbot
 ExecStart=/usr/bin/redis-server /var/lib/jenkins/dumpbot/redis.conf --daemonize no
 Restart=on-failure
@@ -16,4 +14,4 @@ KillSignal=SIGTERM
 TimeoutStopSec=30
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

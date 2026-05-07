@@ -1,14 +1,13 @@
 [Unit]
 Description=Dumpyarabot Telegram bot
-After=network-online.target dumpyarabot-redis.service
-Wants=network-online.target dumpyarabot-redis.service
+After=dumpyarabot-redis.service
+Wants=dumpyarabot-redis.service
+PartOf=dumpyarabot.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=jenkins
-Group=jenkins
 WorkingDirectory=/var/lib/jenkins/dumpbot
 # pydantic-settings reads `.env` from the working directory, so no EnvironmentFile needed.
 ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python -m dumpyarabot
@@ -18,4 +17,4 @@ KillSignal=SIGTERM
 TimeoutStopSec=30
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
