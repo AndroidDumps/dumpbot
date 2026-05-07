@@ -541,10 +541,22 @@ class MessageQueue:
                 console.print(f"[green]Successfully processed {message.type.value} message[/green]")
                 return True
 
+            # For job-status edits, the queued text can be stale by the time it's
+            # dispatched (FIFO drain + RetryAfter requeues). Always pull the latest
+            # rendered text for the job so a delayed edit can't roll the display back
+            # to an old phase. Fall back to the queued text if no live state exists.
+            text = message.text
+            if message.edit_message_id:
+                job_id = (message.context or {}).get("job_id")
+                if job_id:
+                    latest = await self.get_latest_status_text(str(job_id))
+                    if latest:
+                        text = latest
+
             # Prepare common parameters
             kwargs = {
                 "chat_id": message.chat_id,
-                "text": message.text,
+                "text": text,
                 "read_timeout": settings.TELEGRAM_TEXT_READ_TIMEOUT,
                 "write_timeout": settings.TELEGRAM_TEXT_WRITE_TIMEOUT,
             }
