@@ -63,6 +63,7 @@ failure), same as before.
 - `~/dumpbot/whitelist.txt` — read-only whitelist.
 - `uvx` cache — governed by `uv` / `XDG_CACHE_HOME`.
 - The systemd `WorkingDirectory` — process CWD only, not dump payloads.
+- `extract_and_push.sh` — not on the ARQ job path; uses CWD when run standalone.
 
 ## Run
 

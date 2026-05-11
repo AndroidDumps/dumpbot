@@ -451,20 +451,30 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
 
         # Validate custom work-dir base (if configured) before creating the
-        # per-job tempdir. Fail loudly — silent fallback to /tmp is exactly
-        # the disk-space surprise WORK_DIR_BASE exists to prevent.
-        if settings.WORK_DIR_BASE is not None:
-            base = Path(settings.WORK_DIR_BASE)
+        # per-job tempdir. Fail loudly — silent fallback to the system tempdir
+        # (or worse, the worker CWD) is exactly the disk-space surprise
+        # WORK_DIR_BASE exists to prevent.
+        work_dir_base = settings.WORK_DIR_BASE
+        if work_dir_base is not None and work_dir_base != "":
+            base = Path(work_dir_base)
+            if not base.is_absolute():
+                raise RuntimeError(
+                    f"WORK_DIR_BASE {work_dir_base!r} must be an absolute path"
+                )
             if not base.is_dir():
                 raise RuntimeError(
                     f"WORK_DIR_BASE {base} does not exist or is not a directory"
                 )
+        else:
+            # Empty string from `WORK_DIR_BASE=` (no value) is treated as
+            # unset — pass None to TemporaryDirectory.
+            work_dir_base = None
 
         # Create temporary work directory (rooted under WORK_DIR_BASE if set,
         # otherwise the system tempdir).
         with tempfile.TemporaryDirectory(
             prefix=f"dump_{job_id}_",
-            dir=settings.WORK_DIR_BASE,
+            dir=work_dir_base,
         ) as temp_dir:
             work_dir = Path(temp_dir)
             console.print(f"[blue]Working directory: {work_dir}[/blue]")
