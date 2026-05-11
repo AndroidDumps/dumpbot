@@ -450,8 +450,22 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             # transient Redis/bot initialization failures before normal job setup.
             return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
 
-        # Create temporary work directory
-        with tempfile.TemporaryDirectory(prefix=f"dump_{job_id}_") as temp_dir:
+        # Validate custom work-dir base (if configured) before creating the
+        # per-job tempdir. Fail loudly — silent fallback to /tmp is exactly
+        # the disk-space surprise WORK_DIR_BASE exists to prevent.
+        if settings.WORK_DIR_BASE is not None:
+            base = Path(settings.WORK_DIR_BASE)
+            if not base.is_dir():
+                raise RuntimeError(
+                    f"WORK_DIR_BASE {base} does not exist or is not a directory"
+                )
+
+        # Create temporary work directory (rooted under WORK_DIR_BASE if set,
+        # otherwise the system tempdir).
+        with tempfile.TemporaryDirectory(
+            prefix=f"dump_{job_id}_",
+            dir=settings.WORK_DIR_BASE,
+        ) as temp_dir:
             work_dir = Path(temp_dir)
             console.print(f"[blue]Working directory: {work_dir}[/blue]")
 
