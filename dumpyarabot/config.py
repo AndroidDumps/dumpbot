@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     REDIS_KEY_PREFIX: str = "dumpyarabot:"
     ARQ_MAX_JOBS: int = 1
 
+    # Base directory for per-job scratch space (downloads, extraction, dump
+    # staging). Must exist and be a directory. Leave unset to use the
+    # system tempdir.
+    WORK_DIR_BASE: Optional[str] = None
+
     # Telegram formatting configuration
     DEFAULT_PARSE_MODE: str = "Markdown"
     TELEGRAM_TEXT_READ_TIMEOUT: float = 60.0
