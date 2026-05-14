@@ -22,7 +22,13 @@ import arq
 from rich.console import Console
 from telegram import Bot
 
-from dumpyarabot.arq_config import WorkerSettings, shutdown_arq
+from dumpyarabot.arq_config import (
+    WorkerSettings,
+    after_job_end,
+    on_job_start,
+    on_startup,
+    shutdown_arq,
+)
 from dumpyarabot.config import settings as _settings
 from dumpyarabot.message_queue import message_queue
 
@@ -53,7 +59,10 @@ class ARQWorkerManager:
                 max_tries=WorkerSettings.max_tries,
                 health_check_interval=WorkerSettings.health_check_interval,
                 allow_abort_jobs=WorkerSettings.allow_abort_jobs,
-                queue_name=WorkerSettings.queue_name
+                queue_name=WorkerSettings.queue_name,
+                on_startup=on_startup,
+                on_job_start=on_job_start,
+                after_job_end=after_job_end,
             )
 
             # Set up signal handlers for graceful shutdown

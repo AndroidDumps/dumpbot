@@ -11,6 +11,8 @@ from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_git_command
 
 console = Console()
 
+GITLAB_API_TIMEOUT = 300.0
+
 
 class GitLabManager:
     """Handles GitLab repository creation, branch management, and git operations."""
@@ -74,7 +76,7 @@ class GitLabManager:
             response = await client.get(
                 f"https://{self.gitlab_server}/api/v4/groups/{self.org}%2f{subgroup_name}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
-                timeout=30.0
+                timeout=GITLAB_API_TIMEOUT
             )
 
             if response.status_code == 200:
@@ -94,7 +96,7 @@ class GitLabManager:
                     "path": subgroup_name,
                     "visibility": "public"
                 },
-                timeout=30.0
+                timeout=GITLAB_API_TIMEOUT
             )
 
             if create_response.status_code in [200, 201]:
@@ -114,7 +116,7 @@ class GitLabManager:
             response = await client.get(
                 f"https://{self.gitlab_server}/api/v4/projects/{self.org}%2f{repo_subgroup}%2f{repo_name}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
-                timeout=30.0
+                timeout=GITLAB_API_TIMEOUT
             )
 
             if response.status_code == 200:
@@ -133,7 +135,7 @@ class GitLabManager:
                     "name": repo_name,
                     "visibility": "public"
                 },
-                timeout=30.0
+                timeout=GITLAB_API_TIMEOUT
             )
 
             if create_response.status_code in [200, 201]:
@@ -150,7 +152,7 @@ class GitLabManager:
             response = await client.get(
                 f"https://{self.gitlab_server}/api/v4/projects/{project_id}/repository/branches/{branch}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
-                timeout=30.0
+                timeout=GITLAB_API_TIMEOUT
             )
 
             if response.status_code == 200:
@@ -246,7 +248,7 @@ class GitLabManager:
                 f"https://{self.gitlab_server}/api/v4/projects/{project_id}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
                 data={"default_branch": branch},
-                timeout=30.0
+                timeout=GITLAB_API_TIMEOUT
             )
 
             if response.status_code == 200:

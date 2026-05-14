@@ -1,5 +1,5 @@
 [Unit]
-Description=Dumpyarabot ARQ worker
+Description=Dumpyarabot ARQ worker (instance %i)
 After=dumpyarabot-redis.service
 Wants=dumpyarabot-redis.service
 PartOf=dumpyarabot.target
@@ -7,20 +7,21 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
-WorkingDirectory=/var/lib/jenkins/dumpbot
-# systemd user services start with a minimal PATH that excludes ~/.cargo/bin
-# and ~/.local/bin. The worker shells out to `uvx`, `aria2c`, `7zz`, etc. —
-# uvx in particular lives in ~/.cargo/bin/ for jenkins.
+User=jenkins
+# Worker shells out to uvx (~/.cargo/bin) and aria2c/7zz (~/.local/bin),
+# neither of which is on the default system PATH.
 Environment=PATH=/var/lib/jenkins/.cargo/bin:/var/lib/jenkins/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python run_arq_worker.py
+WorkingDirectory=/var/lib/jenkins/dumpbot
+ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python run_arq_worker.py worker_%i
 Restart=on-failure
 RestartSec=10
-KillSignal=SIGTERM
 # Worker's job_timeout is 7200s (2h). Give it that plus a minute of grace
 # so systemd lets an in-flight dump drain on SIGTERM instead of SIGKILLing
 # mid-extraction.
 TimeoutStopSec=7260
+# If a child (aria2c, 7zz) is killed by the kernel OOM killer, don't
+# mark the worker as failed — let it report the child error cleanly.
+OOMPolicy=continue
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

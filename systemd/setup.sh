@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
-# Install dumpyarabot's user-mode systemd units. Idempotent: re-running is safe.
+# Install dumpyarabot's system-mode systemd units. Idempotent.
 #
-# Run as the user the services should run as (the units hard-code paths
-# under /var/lib/jenkins, so `jenkins` is expected):
-#     ./systemd/setup.sh
+# Must be run as root (units live in /etc/systemd/system/, services run
+# as the `jenkins` user via User=jenkins in the unit). Typical:
 #
-# The script links the units from this checkout into the user's
-# `~/.config/systemd/user/` so a `git pull` updates them in place.
+#     sudo /var/lib/jenkins/dumpbot/systemd/setup.sh
 #
-# To install for a different user (e.g. while testing), edit the units
-# to match that user's paths and pass `--force` to bypass the user check.
+# Units are SYMLINKED from this checkout into /etc/systemd/system/ so
+# `git pull` updates them in place. Re-run setup.sh after a pull only
+# if the set of unit files changed; for content-only edits, a plain
+# `sudo systemctl daemon-reload && sudo systemctl restart dumpyarabot.target`
+# is enough.
+#
+# Why system-scope: the worker process gets SIGKILLed by systemd-oomd
+# when run under the jenkins user manager (user@130.service has a 50%
+# PSI kill threshold from Ubuntu 22.04's distro defaults, and oomd has
+# no working off-switch on systemd 249 — every supported override
+# crashes user@.service with status=219/CGROUP). Moving units to the
+# system slice puts the worker outside oomd's PSI monitoring entirely;
+# the kernel OOM killer remains as the real safety net.
 
 set -euo pipefail
 
@@ -18,78 +27,85 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNITS=(
     dumpyarabot-redis.service
     dumpyarabot-bot.service
-    dumpyarabot-worker.service
+    dumpyarabot-worker@.service
     dumpyarabot.target
 )
 
-EXPECTED_USER="jenkins"
-REDIS_DATA_DIR="/var/lib/jenkins/dumpbot-redis"
-USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+# Templated worker instances to enable. Add e.g. `3 4` here (and update
+# dumpyarabot.target's Wants=) to run more workers in parallel.
+WORKER_INSTANCES=(1 2)
 
-force=0
-if [ "${1:-}" = "--force" ]; then
-    force=1
-fi
+RUN_USER="jenkins"
+REDIS_DATA_DIR="/var/lib/jenkins/dumpbot-redis"
+SYSTEM_UNIT_DIR="/etc/systemd/system"
 
 ok()   { printf '  \033[32mok\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m !\033[0m %s\n' "$*" >&2; }
 err()  { printf '  \033[31mxx\033[0m %s\n' "$*" >&2; }
 
-# 0. Sanity: the units pin /var/lib/jenkins paths, so installing as anyone
-# else is almost certainly wrong. Allow override for deliberate test setups.
-if [ "$USER" != "$EXPECTED_USER" ] && [ "$force" -ne 1 ]; then
-    err "running as '$USER' but the units expect '$EXPECTED_USER'"
-    err "  unit files hard-code /var/lib/jenkins/... paths; installing them"
-    err "  under another user will produce broken services on next start."
-    err "  Either run this script as '$EXPECTED_USER' (e.g. 'sudo -iu $EXPECTED_USER $SCRIPT_DIR/setup.sh')"
-    err "  or edit the unit files to match your layout and re-run with --force."
+# 0. Must be root.
+if [ "$(id -u)" -ne 0 ]; then
+    err "must run as root (the units live in $SYSTEM_UNIT_DIR/)"
+    err "  try:  sudo $0"
     exit 1
 fi
 
-# 1. Linger — the only step that needs root, and only if not already on.
-if loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes$'; then
-    ok "linger enabled for $USER"
-else
-    warn "linger NOT enabled for $USER"
-    warn "  one-time root step:  sudo loginctl enable-linger $USER"
-    warn "  (without this, units stop on logout and don't survive reboot)"
-fi
-
-# 2. Redis data directory. /var/lib/jenkins is jenkins-owned in the canonical
-# layout, so plain mkdir works. If we're not jenkins or the dir lives elsewhere,
-# point the user at install(1).
-if [ -d "$REDIS_DATA_DIR" ]; then
-    if [ -w "$REDIS_DATA_DIR" ]; then
-        ok "redis data dir exists: $REDIS_DATA_DIR"
-    else
-        warn "redis data dir exists but is NOT writable by $USER: $REDIS_DATA_DIR"
-        warn "  fix ownership:  sudo chown -R $USER:$USER $REDIS_DATA_DIR"
-    fi
-elif mkdir -p "$REDIS_DATA_DIR" 2>/dev/null; then
+# 1. Redis data directory — owned by the run user.
+if [ ! -d "$REDIS_DATA_DIR" ]; then
+    install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 "$REDIS_DATA_DIR"
     ok "created redis data dir: $REDIS_DATA_DIR"
+elif [ "$(stat -c '%U' "$REDIS_DATA_DIR")" != "$RUN_USER" ]; then
+    chown -R "$RUN_USER:$RUN_USER" "$REDIS_DATA_DIR"
+    ok "chowned $REDIS_DATA_DIR to $RUN_USER"
 else
-    warn "could not create $REDIS_DATA_DIR (not writable as $USER)"
-    warn "  one-time root step:  sudo install -d -o $USER -g $USER -m 0750 $REDIS_DATA_DIR"
+    ok "redis data dir exists and is owned by $RUN_USER: $REDIS_DATA_DIR"
 fi
 
-# 3. User unit directory + symlinks back to this checkout.
-mkdir -p "$USER_UNIT_DIR"
+# 2. Migrate from a previous USER-scope install, if present. The old
+# install left symlinks in ~jenkins/.config/systemd/user/ and used
+# `systemctl --user`. Stop & remove that whole arrangement before
+# installing the system units, to avoid two managers fighting.
+USER_UNIT_DIR="$(eval echo "~$RUN_USER")/.config/systemd/user"
+if [ -d "$USER_UNIT_DIR" ] && \
+   ls -1 "$USER_UNIT_DIR"/dumpyarabot* >/dev/null 2>&1; then
+    warn "found legacy user-scope install in $USER_UNIT_DIR"
+    user_uid="$(id -u "$RUN_USER")"
+    user_runtime="/run/user/$user_uid"
+    user_sc() {
+        sudo -u "$RUN_USER" XDG_RUNTIME_DIR="$user_runtime" systemctl --user "$@"
+    }
+    user_sc stop dumpyarabot.target 'dumpyarabot-*' 2>/dev/null || true
+    user_sc disable dumpyarabot.target 'dumpyarabot-worker@*.service' 2>/dev/null || true
+    rm -f "$USER_UNIT_DIR"/dumpyarabot* \
+          "$USER_UNIT_DIR"/default.target.wants/dumpyarabot* 2>/dev/null || true
+    # Without this, the user manager keeps stale unit metadata until it
+    # exits — confusing if you go looking for them via --user later.
+    user_sc daemon-reload 2>/dev/null || true
+    ok "removed legacy user-scope units"
+fi
+
+# 3. Symlink units from the checkout into /etc/systemd/system/.
 for unit in "${UNITS[@]}"; do
     src="$SCRIPT_DIR/$unit"
-    dst="$USER_UNIT_DIR/$unit"
+    dst="$SYSTEM_UNIT_DIR/$unit"
     if [ ! -e "$src" ]; then
         warn "missing unit in checkout: $src"
         continue
     fi
     ln -sfn "$src" "$dst"
 done
-ok "linked units into $USER_UNIT_DIR"
+ok "linked units into $SYSTEM_UNIT_DIR"
 
-# 4. Reload manager and enable the target. Both are idempotent.
-systemctl --user daemon-reload
-systemctl --user enable --now dumpyarabot.target
-ok "dumpyarabot.target enabled and started"
+# 4. Reload and enable everything.
+systemctl daemon-reload
+
+worker_units=()
+for i in "${WORKER_INSTANCES[@]}"; do
+    worker_units+=("dumpyarabot-worker@${i}.service")
+done
+systemctl enable --now dumpyarabot.target "${worker_units[@]}"
+ok "dumpyarabot.target + ${#worker_units[@]} worker instance(s) enabled and started"
 
 # 5. Status snapshot.
 echo
-systemctl --user --no-pager --output=short list-units 'dumpyarabot*' || true
+systemctl --no-pager --output=short list-units 'dumpyarabot*' || true

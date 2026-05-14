@@ -6,17 +6,24 @@ that integrates with the existing Redis configuration.
 
 import json
 import os
+import shutil
 import signal as _signal
 import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import arq
+import arq.jobs
 from arq import ArqRedis
 from arq.constants import (
+    abort_jobs_ss,
     health_check_key_suffix,
     in_progress_key_prefix,
     job_key_prefix,
+    result_key_prefix,
     retry_key_prefix,
 )
 from rich.console import Console
@@ -187,11 +194,25 @@ class ARQPool:
         """Build the Redis key for a cooperative cancellation request."""
         return f"{settings.REDIS_KEY_PREFIX}cancel_requested:{job_id}"
 
-    async def register_running_job(self, job_id: str, worker_id: str, pid: int) -> None:
-        """Record which worker process currently owns a running job."""
+    async def register_running_job(self, job_id: str, worker_id: str) -> None:
+        """Record which worker process currently owns a running job.
+
+        Stores PID, /proc/<pid>/stat starttime, and current boot_id so
+        recovery can later detect PID reuse and cross-reboot stale entries.
+        """
         pool = await self.get_pool()
-        payload = json.dumps({"worker_id": worker_id, "pid": pid})
-        await pool.set(self._make_running_job_key(job_id), payload, ex=WorkerSettings.job_timeout + 300)
+        pid = os.getpid()
+        payload = json.dumps({
+            "worker_id": worker_id,
+            "pid": pid,
+            "start_time": _proc_start_time(pid),
+            "boot_id": _read_boot_id(),
+        })
+        await pool.set(
+            self._make_running_job_key(job_id),
+            payload,
+            ex=WorkerSettings.job_timeout + 300,
+        )
 
     async def get_running_job_owner(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Fetch the worker ownership metadata for a running job."""
@@ -315,7 +336,6 @@ class ARQPool:
 
         Returns True if any corrective action was taken.
         """
-        pool = await self.get_pool()
         owner = await self.get_running_job_owner(job_id)
         child_pids = await self.get_job_processes(job_id)
         acted = False
@@ -357,19 +377,182 @@ class ARQPool:
                 )
                 owner = None
 
-        # No live worker — delete the stale in-progress key so ARQ stops
-        # treating the job as running and the worker can pick up the next job.
-        ip_key = self._make_job_key(in_progress_key_prefix, job_id)
-        deleted = 0
+        # No live worker — delegate to the shared recovery helper, which
+        # does the full atomic cleanup (queue/abort ZREMs, retry/in-progress/
+        # job DELs, synthetic failed result) plus custom-key cleanup.
         if not owner_alive and not live_child_pids:
-            deleted = await pool.delete(ip_key)
-            await self.clear_running_job(job_id)
-            await self.clear_job_processes(job_id)
-        if deleted:
-            console.print(f"[yellow]Deleted stale in-progress key for job {job_id}[/yellow]")
-            return True
+            recovered = await self._recover_crashed_job(job_id)
+            if recovered:
+                console.print(f"[yellow]Force-cancel recovered orphan job {job_id}[/yellow]")
+                return True
 
         return acted
+
+    async def _recover_crashed_job(self, job_id: str) -> bool:
+        """Mark an orphaned job as failed and clean ARQ state.
+
+        Returns True if recovery was performed, False if the job is either
+        still owned by a live worker or already terminal.
+
+        Mirrors arq.worker.Worker.finish_failed_job's MULTI/EXEC cleanup
+        (worker.py:713-727) and uses arq.jobs.serialize_result for the
+        synthetic result payload so arq.jobs.Job.result_info() can read it.
+        """
+        pool = await self.get_pool()
+
+        # 1. Idempotency guard.
+        if await pool.exists(f"{result_key_prefix}{job_id}"):
+            return False
+
+        # 2. Owner liveness check.
+        running_key = self._make_running_job_key(job_id)
+        raw = await pool.get(running_key)
+
+        if raw is None:
+            # No running_job metadata. This can happen two ways:
+            #  (a) The SCAN found this id only via arq:in-progress:<id> — meaning
+            #      the worker died inside the run_job pre-hook window. There is
+            #      no recoverable owner; recovery should still clean ARQ state.
+            #  (b) Another path already cleaned the metadata but the in-progress
+            #      key lingered (shouldn't happen, but be defensive).
+            # Both require arq:in-progress:<id> to actually exist; otherwise
+            # the id is fully cleaned and we're done.
+            if not await pool.exists(f"{in_progress_key_prefix}{job_id}"):
+                return False
+            # Cross-queue safety: arq:in-progress:* is GLOBAL (not queue-scoped).
+            # If we only see in-progress and no running_job, the job might belong
+            # to a foreign ARQ queue sharing this Redis. Verify it's in OUR queue
+            # before clobbering it. If the job is mid-flight in another worker on
+            # a different queue, our queue ZSET will not contain its id.
+            if await pool.zscore(WorkerSettings.queue_name, job_id) is None:
+                return False
+            owner = {}
+        else:
+            try:
+                value = raw if isinstance(raw, str) else raw.decode()
+                owner = json.loads(value)
+            except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                owner = {}
+            if not isinstance(owner, dict):
+                owner = {}
+
+            raw_pid = owner.get("pid")
+            try:
+                pid_int = int(raw_pid) if raw_pid is not None else 0
+            except (TypeError, ValueError):
+                pid_int = 0
+            if pid_int <= 0:
+                # Malformed/missing owner PID; cannot verify liveness — treat as orphan.
+                pid_alive = False
+            else:
+                pid_alive = _pid_owner_alive(
+                    pid=pid_int,
+                    start_time=owner.get("start_time"),
+                    boot_id=owner.get("boot_id"),
+                )
+            if pid_alive:
+                return False
+
+        # 3. Load original job spec (may be missing).
+        job_blob = await pool.get(f"{job_key_prefix}{job_id}")
+        function_name: Optional[str] = None
+        args: tuple = ()
+        kwargs: dict = {}
+        job_try: int = 1
+        enqueue_time_ms: int = int(time.time() * 1000)
+        job_data: Optional[Dict[str, Any]] = None
+        result_bytes: Optional[bytes] = None
+
+        if job_blob is not None:
+            try:
+                function_name, args, kwargs, job_try, enqueue_time_ms = arq.jobs.deserialize_job_raw(job_blob)
+            except Exception as exc:
+                console.print(f"[yellow]Recovery: could not deserialize arq:job for {job_id}: {exc}[/yellow]")
+                function_name = None
+
+            # 4. Build synthetic failed result (only if we have a function name).
+            if function_name is not None:
+                try:
+                    result_bytes = arq.jobs.serialize_result(
+                        function=function_name,
+                        args=args,
+                        kwargs=kwargs,
+                        job_try=job_try,
+                        enqueue_time_ms=enqueue_time_ms,
+                        success=False,
+                        result=Exception("Worker process killed before job completed"),
+                        start_ms=enqueue_time_ms,
+                        finished_ms=int(time.time() * 1000),
+                        ref=f"{job_id}:{function_name}",
+                        queue_name=WorkerSettings.queue_name,
+                        job_id=job_id,
+                    )
+                except Exception as exc:
+                    console.print(f"[yellow]Recovery: serialize_result failed for {job_id}: {exc}[/yellow]")
+                    result_bytes = None
+
+            # Build job_data for Telegram notification (only if args[0] is a dict).
+            if args and isinstance(args[0], dict):
+                job_data = args[0]
+
+        # 5. Atomic Redis cleanup (mirrors Worker.finish_failed_job).
+        keep_forever = getattr(WorkerSettings, "keep_result_forever", False)
+        keep_result_s = getattr(WorkerSettings, "keep_result", 0) or 0
+
+        async with pool.pipeline(transaction=True) as tr:
+            tr.delete(
+                f"{retry_key_prefix}{job_id}",
+                f"{in_progress_key_prefix}{job_id}",
+                f"{job_key_prefix}{job_id}",
+            )
+            tr.zrem(abort_jobs_ss, job_id)
+            tr.zrem(WorkerSettings.queue_name, job_id)
+            if result_bytes is not None and (keep_forever or keep_result_s > 0):
+                if keep_forever:
+                    # Redis rejects PX=0; omit the expiration for keep-forever.
+                    tr.set(f"{result_key_prefix}{job_id}", result_bytes)
+                else:
+                    tr.set(
+                        f"{result_key_prefix}{job_id}",
+                        result_bytes,
+                        px=int(keep_result_s * 1000),
+                    )
+            await tr.execute()
+
+        # 6. Clean custom keys (outside the transaction).
+        await self.clear_running_job(job_id)
+        await self.clear_job_processes(job_id)
+        await self.clear_job_cancel_request(job_id)
+
+        # 7. Telegram notification (best-effort).
+        if job_data is not None:
+            reason = "Worker process killed before job completed. Please re-submit."
+            # Populate metadata.error_context so the formatter renders the
+            # failure reason. Without this, format_comprehensive_progress_message
+            # and _build_failure_log_text both silently drop the error text
+            # because their gate requires error_context to be truthy.
+            metadata = job_data.setdefault("metadata", {})
+            progress_history = metadata.get("progress_history") or []
+            last_step = (
+                progress_history[-1].get("message", "Unknown step")
+                if progress_history
+                else "Worker killed before any step"
+            )
+            metadata["error_context"] = {
+                "message": reason,
+                "current_step": "Worker killed (SIGKILL/OOM/crash)",
+                "last_successful_step": last_step,
+                "failure_time": datetime.now(timezone.utc).isoformat(),
+                "traceback": None,
+            }
+            metadata.setdefault("status", "failed")
+            metadata.setdefault(
+                "end_time", datetime.now(timezone.utc).isoformat()
+            )
+            await _send_recovery_notification(job_data, reason)
+
+        console.print(f"[yellow]Recovered crashed job {job_id}[/yellow]")
+        return True
 
     def _terminate_process_tree(self, pid: int) -> None:
         """Terminate a subprocess tree rooted at the given PID."""
@@ -496,8 +679,252 @@ class ARQPool:
             console.print("[yellow]ARQ Redis pool closed[/yellow]")
 
 
+def _proc_start_time(pid: int) -> Optional[int]:
+    """Read field 22 (starttime, in clock ticks since boot) from /proc/<pid>/stat.
+
+    The comm field (#2) can contain spaces and parentheses, so we split on the
+    last ')' to find the boundary. After that boundary, the tail starts with
+    state (field 3), so field N is at tail-index N-3 and field 22 is index 19.
+
+    Returns None on any read or parse error.
+    """
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            line = f.read()
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return None
+
+    rparen = line.rfind(")")
+    if rparen < 0:
+        return None
+    tail = line[rparen + 1 :].split()
+    if len(tail) < 20:
+        return None
+    try:
+        return int(tail[19])
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_boot_id() -> Optional[str]:
+    """Return the current boot identifier (UUID) from /proc/sys/kernel/random/boot_id.
+
+    Changes on every reboot. Returns None on any read error.
+    """
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+
+
+def _pid_owner_alive(pid: int, start_time: Optional[int], boot_id: Optional[str]) -> bool:
+    """Decide whether the worker process that registered a running_job is still alive.
+
+    Rules:
+      - boot_id missing or != current → orphan (host rebooted, or pre-upgrade entry).
+      - os.kill(pid, 0) raises ProcessLookupError → orphan.
+      - /proc/<pid>/stat field 22 differs from stored start_time → orphan (PID reuse).
+      - /proc/<pid>/stat unreadable → fall back to bare PID-liveness (small residual risk).
+      - stored start_time is None but /proc gives a value → cannot verify, treat as orphan.
+    """
+    current_boot = _read_boot_id()
+    if boot_id is None or current_boot is None or boot_id != current_boot:
+        return False
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # PermissionError etc. — process exists but we can't signal it.
+        return True
+
+    current_start = _proc_start_time(pid)
+    if current_start is None:
+        # /proc unreadable: trust the bare PID-liveness signal.
+        return True
+    if start_time is None:
+        # Pre-upgrade entry with no recorded start_time; can't verify.
+        return False
+    return current_start == start_time
+
+
+async def _send_recovery_notification(job_data: Dict[str, Any], reason: str) -> None:
+    """Send a crash-recovery Telegram notification.
+
+    Thin wrapper around dumpyarabot.arq_jobs._send_failure_notification so
+    that this module can be imported without circular imports — the function
+    is resolved at call time, not import time.
+    """
+    from dumpyarabot.arq_jobs import _send_failure_notification
+
+    try:
+        await _send_failure_notification(job_data, reason)
+    except Exception as exc:
+        console.print(f"[red]Recovery: failed to send Telegram notification: {exc}[/red]")
+
+
 # Global ARQ pool instance
 arq_pool = ARQPool()
+
+
+async def on_job_start(ctx: Dict[str, Any]) -> None:
+    """ARQ hook: register ownership before the user function runs.
+
+    Narrows (but does not fully close) the race window between ARQ setting
+    arq:in-progress:<id> (worker.py:~465, inside start_jobs) and our owner
+    metadata being recorded. There is still a small window inside run_job
+    where ARQ does job-fetch, retry-increment, and deserialization before
+    invoking on_job_start (worker.py:584). The recovery path in on_startup
+    handles that residual window by also scanning arq:in-progress:* — any
+    in-progress key without a matching running_job is treated as an orphan.
+    """
+    job_id = ctx.get("job_id")
+    if not job_id:
+        return
+    worker_id = f"arq@{str(job_id)[:8]}"
+    await arq_pool.register_running_job(job_id, worker_id)
+    await arq_pool.clear_job_cancel_request(job_id)
+
+
+async def after_job_end(ctx: Dict[str, Any]) -> None:
+    """ARQ hook: clean ownership AFTER the result has been recorded.
+
+    We use `after_job_end` (worker.py:679) rather than `on_job_end`
+    (worker.py:664) because ARQ runs them in this order:
+        on_job_end → finish_job (writes result, DELs arq:in-progress) → after_job_end
+    Clearing running_job in `on_job_end` would leave a gap where a SIGKILL
+    between `on_job_end` and `finish_job` strands arq:in-progress with no
+    matching running_job, which the startup-recovery SCAN cannot see.
+    `after_job_end` runs after ARQ has already deleted in-progress, so the
+    two states are torn down in the safe order.
+    """
+    job_id = ctx.get("job_id")
+    if not job_id:
+        return
+    await arq_pool.clear_running_job(job_id)
+    await arq_pool.clear_job_processes(job_id)
+    await arq_pool.clear_job_cancel_request(job_id)
+
+
+async def _sweep_stale_work_dirs() -> None:
+    """Remove `dump_<job>_<rand>/` dirs left behind by SIGKILL'd workers.
+
+    Multi-worker safe: skips any dir whose job still has a running_job:<id>
+    Redis key (i.e. owned by *some* live worker), and skips anything younger
+    than job_timeout + 1h (covers the enqueue→pick→register race where a
+    brand-new dir has no Redis key for a few seconds).
+    """
+    base_str = settings.WORK_DIR_BASE
+    if not base_str:
+        return
+    base = Path(base_str)
+    if not base.is_dir():
+        return
+
+    pool = await arq_pool.get_pool()
+    min_age = WorkerSettings.job_timeout + 3600  # 2h + 1h grace
+    now = time.time()
+    removed = 0
+    freed_bytes = 0
+
+    for entry in base.iterdir():
+        if not entry.is_dir() or not entry.name.startswith("dump_"):
+            continue
+
+        # Parse `dump_<job_id>_<rand>` → job_id. job_id is hex (no '_').
+        try:
+            job_part = entry.name[len("dump_"):]
+            job_id = job_part.rsplit("_", 1)[0]
+        except Exception:
+            continue
+        if not job_id:
+            continue
+
+        running_key = f"{settings.REDIS_KEY_PREFIX}running_job:{job_id}"
+        if await pool.exists(running_key):
+            continue
+
+        try:
+            age = now - entry.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if age < min_age:
+            continue
+
+        try:
+            size = sum(p.stat().st_size for p in entry.rglob("*") if p.is_file())
+        except Exception:
+            size = 0
+        try:
+            shutil.rmtree(entry)
+            removed += 1
+            freed_bytes += size
+            console.print(f"[yellow]Swept stale work dir: {entry} ({size // (1024**3)}G)[/yellow]")
+        except Exception as exc:
+            console.print(f"[red]Failed to remove {entry}: {exc}[/red]")
+
+    if removed:
+        console.print(
+            f"[yellow]Swept {removed} stale work dir(s), freed ~{freed_bytes // (1024**3)}G[/yellow]"
+        )
+
+
+async def on_startup(ctx: Dict[str, Any]) -> None:
+    """ARQ hook: scan for orphaned in-progress jobs and mark them failed.
+
+    Wrapped in a top-level try/except so a transient Redis error or other
+    enumeration failure logs and returns instead of crashing the worker.
+    Per-job recovery has its own try/except too.
+    """
+    try:
+        pool = await arq_pool.get_pool()
+        running_prefix = f"{settings.REDIS_KEY_PREFIX}running_job:"
+
+        # Collect job ids from both <prefix>running_job:* and arq:in-progress:*.
+        # The latter catches the residual window where ARQ sets in-progress
+        # before run_job invokes on_job_start (worker.py:465 → :584); a kill
+        # in that window leaves an in-progress key with no running_job.
+        seen: set = set()
+
+        async def _scan(prefix: str, strip_len: int) -> None:
+            pattern = f"{prefix}*"
+            cursor = 0
+            while True:
+                cursor, keys = await pool.scan(cursor=cursor, match=pattern, count=100)
+                for key in keys:
+                    key_str = key.decode() if isinstance(key, bytes) else key
+                    job_id = key_str[strip_len:]
+                    if job_id:
+                        seen.add(job_id)
+                if cursor == 0:
+                    break
+
+        await _scan(running_prefix, len(running_prefix))
+        await _scan(in_progress_key_prefix, len(in_progress_key_prefix))
+
+        recovered = 0
+        for job_id in seen:
+            try:
+                if await arq_pool._recover_crashed_job(job_id):
+                    recovered += 1
+            except Exception as exc:
+                console.print(
+                    f"[red]Recovery for job {job_id} raised: {exc}[/red]"
+                )
+
+        if recovered:
+            console.print(
+                f"[yellow]Recovered {recovered} crashed job(s) from previous worker run[/yellow]"
+            )
+    except Exception as exc:
+        console.print(f"[red]on_startup recovery failed: {exc}[/red]")
+
+    try:
+        await _sweep_stale_work_dirs()
+    except Exception as exc:
+        console.print(f"[red]on_startup work-dir sweep failed: {exc}[/red]")
 
 
 async def init_arq():

@@ -1,6 +1,8 @@
 *log*
 *tmp*
 *test*
+!tests/
+!tests/**
 *__pycache__*
 .idea/
 venv/

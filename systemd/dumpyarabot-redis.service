@@ -5,13 +5,12 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
+User=jenkins
 WorkingDirectory=/var/lib/jenkins/dumpbot
 ExecStart=/usr/bin/redis-server /var/lib/jenkins/dumpbot/redis.conf --daemonize no
 Restart=on-failure
 RestartSec=5
-KillSignal=SIGTERM
 TimeoutStopSec=30
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

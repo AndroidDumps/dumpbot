@@ -5,7 +5,6 @@ while preserving all Telegram messaging features and cross-chat functionality.
 """
 
 import asyncio
-import os
 import re
 import tempfile
 import traceback
@@ -429,8 +428,9 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
         job_data["arq_job_id"] = ctx.get('job_id')
         job_data["worker_id"] = f"arq@{job_data['arq_job_id'][:8]}" if job_data["arq_job_id"] else "arq_worker"
 
-        await arq_pool.register_running_job(job_id, job_data["worker_id"], os.getpid())
-        await arq_pool.clear_job_cancel_request(job_id)
+        # Ownership registration happens in the ARQ on_job_start hook
+        # (arq_config.on_job_start) before this function runs. The
+        # cancel-request clear is also done there.
         job_token = set_current_job_id(job_id)
 
         # Verify Telegram context before doing any heavy work.
@@ -691,9 +691,12 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
     finally:
         if job_token is not None:
             reset_current_job_id(job_token)
-        await arq_pool.clear_running_job(job_id)
-        await arq_pool.clear_job_processes(job_id)
-        await arq_pool.clear_job_cancel_request(job_id)
+        # Ownership cleanup moved to the after_job_end hook (arq_config.after_job_end)
+        # which runs AFTER ARQ's finish_job has deleted arq:in-progress. Clearing
+        # running_job here would happen BEFORE finish_job, recreating the very
+        # teardown race that prompted moving to a hook in the first place.
+
+
 class JobCancelledError(Exception):
     """Raised when a cooperative cancellation request is detected."""
 
