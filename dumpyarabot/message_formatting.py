@@ -323,16 +323,23 @@ async def format_comprehensive_progress_message(
     # Add device information when available
     if metadata and metadata.get("device_info"):
         device_info = metadata["device_info"]
-        message += f"\n *Device:* {device_info.get('brand', 'Unknown')} {device_info.get('codename', 'Unknown')}"
-        if device_info.get('android_version'):
-            message += f" (Android {device_info['android_version']})"
+        # Device fields render as plain text (no surrounding backticks), so they
+        # must be escaped or an underscore in a codename breaks the edit.
+        brand = escape_markdown(device_info.get("brand", "Unknown"))
+        codename = escape_markdown(device_info.get("codename", "Unknown"))
+        message += f"\n *Device:* {brand} {codename}"
+        if android_version := device_info.get("android_version"):
+            message += f" (Android {escape_markdown(str(android_version))})"
         message += "\n"
 
     # Enhanced completion information
     if progress and progress.get("percentage", 0) >= 100 and metadata:
         if metadata.get("repository"):
             repo = metadata["repository"]
-            message += f"\n *Repository:* {repo['url']}\n"
+            # Bare URL (not backticked), so escape it — branch paths contain
+            # underscores (e.g. .../tree/lagos_g-user-...) that would otherwise
+            # open an italic entity Telegram can't close.
+            message += f"\n *Repository:* {escape_markdown(repo['url'])}\n"
 
             # Add device fingerprint for completed dumps
             if metadata.get("device_info"):
@@ -398,11 +405,14 @@ def format_device_properties_message(device_props: Dict[str, Any]) -> str:
     Returns:
         Formatted device properties message
     """
-    brand = escape_markdown(device_props.get("brand", "Unknown"))
-    codename = escape_markdown(device_props.get("codename", "Unknown"))
-    release = escape_markdown(device_props.get("release", "Unknown"))
-    fingerprint = escape_markdown(device_props.get("fingerprint", "Unknown"))
-    platform = escape_markdown(device_props.get("platform", "Unknown"))
+    # Values are rendered inside `code spans` below, where Telegram treats every
+    # character literally. Escaping here would leak a visible backslash into
+    # channel posts (e.g. `lagos\_g`), so pass the raw values through.
+    brand = device_props.get("brand", "Unknown")
+    codename = device_props.get("codename", "Unknown")
+    release = device_props.get("release", "Unknown")
+    fingerprint = device_props.get("fingerprint", "Unknown")
+    platform = device_props.get("platform", "Unknown")
 
     return f"""*Brand*: `{brand}`
 *Device*: `{codename}`
