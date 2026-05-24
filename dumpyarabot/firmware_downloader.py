@@ -198,6 +198,7 @@ class FirmwareDownloader:
         """Download using aria2 RPC (with live progress) and wget fallback."""
         # --- Try aria2 RPC first ---
         aria2_failed = False
+        aria2_error = ""
         try:
             async with Aria2Manager(str(self.work_dir)) as aria2:
                 async for progress in aria2.download(url, poll_interval=3.0, timeout=1800.0):
@@ -214,10 +215,14 @@ class FirmwareDownloader:
                     return downloaded
 
                 # aria2 reported completion but no file found
-                console.print("[yellow]aria2 completed but no file found in work dir[/yellow]")
+                aria2_error = "aria2 completed but no file found in work dir"
+                console.print(f"[yellow]{aria2_error}[/yellow]")
                 aria2_failed = True
         except Exception as e:
-            console.print(f"[yellow]aria2 RPC download failed: {e}[/yellow]")
+            # Keep the actual aria2 reason (error code + message); the console line
+            # only reaches journald, so we also stash it for the final exception.
+            aria2_error = str(e) or repr(e)
+            console.print(f"[yellow]aria2 RPC download failed: {aria2_error}[/yellow]")
             aria2_failed = True
 
         if not aria2_failed:
@@ -231,19 +236,29 @@ class FirmwareDownloader:
         console.print("[yellow]Falling back to wget...[/yellow]")
 
         # --- wget fallback ---
+        # Use -nv (not -q): -q silences errors too, so a failed download would
+        # leave stderr empty. -nv drops the progress bar but keeps error output.
         result = await run_download_command(
-            "wget", "-q", "--no-check-certificate", url,
+            "wget", "-nv", "--no-check-certificate", url,
             cwd=self.work_dir,
             timeout=1800.0,
             description="Downloading with wget fallback"
         )
 
         if not result.success:
-            raise Exception(f"Both aria2 RPC and wget failed. Last error: {result.stderr}")
+            wget_error = result.stderr.strip() or "(no stderr output)"
+            raise Exception(
+                "Both aria2 RPC and wget failed. "
+                f"aria2: {aria2_error or '(no error captured)'}; "
+                f"wget: {wget_error}"
+            )
 
         latest_file = get_latest_file_in_directory(self.work_dir)
         if not latest_file:
-            raise Exception("No file found after wget download")
+            raise Exception(
+                "wget reported success but no file was found in the work dir "
+                f"(aria2 had failed first: {aria2_error or '(no error captured)'})"
+            )
 
         return str(latest_file)
 
