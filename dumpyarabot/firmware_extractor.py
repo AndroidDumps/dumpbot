@@ -24,9 +24,20 @@ class FirmwareExtractor:
         console.print(f"[blue]Extracting firmware: {firmware_path}[/blue]")
 
         if job.dump_args.use_alt_dumper:
-            return await self._extract_with_alternative_dumper(firmware_path)
+            extraction_dir = await self._extract_with_alternative_dumper(firmware_path)
         else:
-            return await self._extract_with_python_dumper(firmware_path)
+            extraction_dir = await self._extract_with_python_dumper(firmware_path)
+
+        # Delete the original firmware archive so it isn't committed/pushed with
+        # the extracted contents. Mirrors `rm -f "$FILE"` from the legacy
+        # extract_and_push.sh; without it every dump shipped its multi-GB source
+        # archive at the repo root.
+        if safe_remove_file(firmware_path):
+            console.print(f"[green]Removed original firmware archive: {firmware_path}[/green]")
+        else:
+            console.print(f"[yellow]Failed to remove original firmware archive: {firmware_path}[/yellow]")
+
+        return extraction_dir
 
     async def _extract_with_python_dumper(self, firmware_path: str) -> str:
         """Extract using the modern Python dumpyara tool."""
