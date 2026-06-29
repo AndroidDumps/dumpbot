@@ -5,15 +5,17 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, List
 
+import httpx
 import redis.asyncio as redis
 from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from telegram import Bot
-from telegram.error import RetryAfter, TelegramError, NetworkError, BadRequest
+from telegram.error import Forbidden, RetryAfter, TelegramError, NetworkError, BadRequest
 import telegram
 
-from dumpyarabot.config import settings
+from dumpyarabot.config import settings, RICH_MARKDOWN_PARSE_MODE
 from dumpyarabot.schemas import DumpArguments, DumpJob, JobCancelResult, JobProgress, JobStatus
+from dumpyarabot.utils import legacy_markdown_to_rich_markdown
 
 console = Console()
 
@@ -388,6 +390,120 @@ class MessageQueue:
         console.print(f"[green]Sent immediate message {message.message_id} to chat {chat_id}[/green]")
         return message
 
+    # ========== BOT API 10.1 RICH MESSAGE SUPPORT ==========
+    # python-telegram-bot (<=22.7, pinned <23.0) does not yet expose
+    # sendRichMessage / editMessageText(rich_message), so these are called via the
+    # raw Bot API. Telegram error responses are translated into the same
+    # telegram.error exceptions PTB raises, so the existing retry / dead-letter /
+    # "message is not modified" handling in _process_message works unchanged.
+
+    def _telegram_api_base(self) -> str:
+        """Return the ``.../bot<token>`` prefix for raw Bot API requests."""
+        if settings.TELEGRAM_API_BASE_URL:
+            base = settings.TELEGRAM_API_BASE_URL.rstrip("/")
+        else:
+            base = "https://api.telegram.org"
+        return f"{base}/bot{settings.TELEGRAM_BOT_TOKEN}"
+
+    async def _call_rich_api(self, method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Call a raw Bot API method, returning ``result`` or raising a telegram error."""
+        url = f"{self._telegram_api_base()}/{method}"
+        timeout = httpx.Timeout(
+            settings.TELEGRAM_TEXT_WRITE_TIMEOUT,
+            read=settings.TELEGRAM_TEXT_READ_TIMEOUT,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=payload)
+            data = response.json()
+        except httpx.HTTPError as e:
+            raise NetworkError(f"{method} transport error: {e}") from e
+        except ValueError as e:  # non-JSON body
+            raise TelegramError(f"{method} returned a non-JSON response: {e}") from e
+
+        if data.get("ok"):
+            return data.get("result", {})
+
+        error_code = data.get("error_code")
+        description = data.get("description", "unknown error")
+        if error_code == 429:
+            retry_after = int((data.get("parameters") or {}).get("retry_after", 1))
+            raise RetryAfter(retry_after)
+        if error_code == 403:
+            raise Forbidden(description)
+        if error_code == 400:
+            raise BadRequest(description)
+        raise TelegramError(f"{method} failed ({error_code}): {description}")
+
+    @staticmethod
+    def _build_input_rich_message(text: str) -> Dict[str, Any]:
+        """Wrap legacy-Markdown ``text`` into an InputRichMessage payload."""
+        return {"markdown": legacy_markdown_to_rich_markdown(text)}
+
+    async def send_immediate_rich_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_to_message_id: Optional[int] = None,
+    ) -> "telegram.Message":
+        """Send a rich message directly via sendRichMessage and return the Message.
+
+        Mirrors send_immediate_message but uses the Bot API 10.1 rich-text endpoint
+        so the returned message_id can be edited later with editMessageText(rich_message).
+        """
+        bot = await self._ensure_bot()
+
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "rich_message": self._build_input_rich_message(text),
+        }
+        if reply_to_message_id:
+            payload["reply_parameters"] = {"message_id": reply_to_message_id}
+
+        console.print(f"[blue]Sending immediate rich message to chat {chat_id}[/blue]")
+        result = await self._call_rich_api("sendRichMessage", payload)
+        message = telegram.Message.de_json(result, bot)
+        console.print(f"[green]Sent immediate rich message {message.message_id} to chat {chat_id}[/green]")
+        return message
+
+    async def _process_rich_message(self, message: "QueuedMessage", text: str) -> None:
+        """Dispatch a queued message through the rich-text endpoints.
+
+        Raises the same telegram.error exceptions as the legacy path, so the
+        caller's retry / dead-letter / no-op-edit handling is reused verbatim.
+        """
+        rich_message = self._build_input_rich_message(text)
+
+        if message.edit_message_id:
+            await self._call_rich_api(
+                "editMessageText",
+                {
+                    "chat_id": message.chat_id,
+                    "message_id": message.edit_message_id,
+                    "rich_message": rich_message,
+                },
+            )
+            return
+
+        payload: Dict[str, Any] = {
+            "chat_id": message.chat_id,
+            "rich_message": rich_message,
+        }
+        if message.reply_parameters:
+            payload["reply_parameters"] = {
+                "message_id": message.reply_parameters["message_id"],
+                "chat_id": message.reply_parameters["chat_id"],
+            }
+        elif message.reply_to_message_id:
+            payload["reply_parameters"] = {"message_id": message.reply_to_message_id}
+
+        result = await self._call_rich_api("sendRichMessage", payload)
+
+        if message.delete_after:
+            asyncio.create_task(
+                self._auto_delete_message(message.chat_id, result["message_id"], message.delete_after)
+            )
+
     async def send_immediate_status_update(
         self,
         chat_id: int,
@@ -606,6 +722,13 @@ class MessageQueue:
                     latest = await self.get_latest_status_text(str(job_id))
                     if latest:
                         text = latest
+
+            # Bot API 10.1 rich messages take a separate code path: the text is
+            # delivered as an InputRichMessage rather than text + parse_mode.
+            if message.parse_mode == RICH_MARKDOWN_PARSE_MODE:
+                await self._process_rich_message(message, text)
+                console.print(f"[green]Successfully processed {message.type.value} message[/green]")
+                return True
 
             # Prepare common parameters
             kwargs = {
@@ -882,13 +1005,25 @@ class MessageQueue:
             probe_text = job_data.get("_queued_text", f"\u23f3 Job `{job_id}` starting...")
 
         try:
-            await bot.edit_message_text(
-                chat_id=initial_chat_id,
-                message_id=initial_message_id,
-                text=probe_text,
-                parse_mode=settings.DEFAULT_PARSE_MODE,
-                disable_web_page_preview=True,
-            )
+            if job_data.get("_rich_status"):
+                # The status message was sent via sendRichMessage, so it must be
+                # probed/edited via editMessageText(rich_message) to stay rich.
+                await self._call_rich_api(
+                    "editMessageText",
+                    {
+                        "chat_id": initial_chat_id,
+                        "message_id": initial_message_id,
+                        "rich_message": self._build_input_rich_message(probe_text),
+                    },
+                )
+            else:
+                await bot.edit_message_text(
+                    chat_id=initial_chat_id,
+                    message_id=initial_message_id,
+                    text=probe_text,
+                    parse_mode=settings.DEFAULT_PARSE_MODE,
+                    disable_web_page_preview=True,
+                )
         except Forbidden as e:
             raise RuntimeError(f"Telegram context invalid (bot blocked/forbidden): {e}") from e
         except BadRequest as e:

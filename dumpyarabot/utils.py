@@ -1,3 +1,4 @@
+import re
 import secrets
 import asyncio
 from datetime import datetime
@@ -80,3 +81,53 @@ def escape_markdown(text: str) -> str:
 def generate_request_id() -> str:
     """Generate a unique request ID."""
     return secrets.token_hex(4)  # 8-character hex string
+
+
+# Sentinels used to shield code spans, fenced blocks and backslash escapes while
+# rewriting emphasis markers. Control characters won't occur in our status text.
+_RICH_STASH_OPEN = "\x00"
+_RICH_STASH_CLOSE = "\x01"
+_RICH_STASH_RE = re.compile(r"\x00(\d+)\x01")
+_RICH_PROTECT_RE = re.compile(
+    r"```.*?```"      # fenced code block (pre)
+    r"|`[^`]*`"       # inline code span
+    r"|\\.",          # backslash escape, e.g. \* \_ \[ \`
+    re.DOTALL,
+)
+
+
+def legacy_markdown_to_rich_markdown(text: str) -> str:
+    """Convert Telegram legacy ``Markdown`` text into Bot API 10.1 Rich Markdown.
+
+    The bot builds every status string in legacy ``Markdown`` (``*bold*``,
+    ``_italic_``, ``code spans`` and ``[links](url)``). Rich Markdown reuses the
+    same syntax with one breaking difference: a single ``*x*`` now means *italic*,
+    while **bold** requires ``**x**``. Italic (``_x_``), code spans, fenced blocks,
+    links and backslash escapes are identical in both dialects, so the only
+    rewrite needed is doubling the bold asterisks.
+
+    In valid legacy Markdown every literal asterisk is backslash-escaped (``\\*``),
+    so once escapes, code spans and fenced blocks are shielded, every remaining
+    ``*`` is a bold delimiter and can be safely doubled.
+
+    Args:
+        text: A string formatted for the legacy ``Markdown`` parse mode.
+
+    Returns:
+        The equivalent string formatted for the Rich Markdown parse mode.
+    """
+    if not text:
+        return text
+
+    stash: List[str] = []
+
+    def _protect(match: "re.Match[str]") -> str:
+        stash.append(match.group(0))
+        return f"{_RICH_STASH_OPEN}{len(stash) - 1}{_RICH_STASH_CLOSE}"
+
+    shielded = _RICH_PROTECT_RE.sub(_protect, text)
+
+    # Every surviving asterisk delimits legacy bold; ``**`` is Rich Markdown bold.
+    shielded = shielded.replace("*", "**")
+
+    return _RICH_STASH_RE.sub(lambda m: stash[int(m.group(1))], shielded)

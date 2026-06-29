@@ -44,6 +44,12 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+# Sentinel parse mode that routes a queued/edited message through the Bot API
+# 10.1 rich-text endpoints (sendRichMessage / editMessageText with rich_message)
+# instead of the legacy send_message/edit_message_text + parse_mode path.
+RICH_MARKDOWN_PARSE_MODE = "RichMarkdown"
+
+
 # Callback data prefixes
 CALLBACK_ACCEPT = "accept_"
 CALLBACK_REJECT = "reject_"
