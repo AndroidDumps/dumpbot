@@ -391,10 +391,15 @@ class MessageQueue:
         return message
 
     # ========== BOT API 10.1 RICH MESSAGE SUPPORT ==========
-    # python-telegram-bot (<=22.7, pinned <23.0) does not yet expose
-    # sendRichMessage / editMessageText(rich_message), so these are called via the
-    # raw Bot API. Telegram error responses are translated into the same
-    # telegram.error exceptions PTB raises, so the existing retry / dead-letter /
+    # Rich Messages landed in Bot API 10.1, but no released python-telegram-bot
+    # exposes them yet: 22.8 (latest, the version pinned here) only reaches Bot
+    # API 10.0, and upstream support is still open
+    # (https://github.com/python-telegram-bot/python-telegram-bot/issues/5261).
+    # Until a PTB release ships sendRichMessage / editMessageText(rich_message) /
+    # InputRichMessage, they are called here via the raw Bot API.
+    # TODO: replace _call_rich_api with PTB's typed methods once PTB supports 10.1.
+    # Telegram error responses are translated into the same telegram.error
+    # exceptions PTB raises, so the existing retry / dead-letter /
     # "message is not modified" handling in _process_message works unchanged.
 
     def _telegram_api_base(self) -> str:
