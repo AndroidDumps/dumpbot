@@ -122,8 +122,10 @@ async def dump(
         initial_text += "*Elapsed:* 0s\n"
         initial_text += " *Worker:* Waiting for assignment...\n"
 
-        # Send initial message directly to get real Telegram message ID
-        initial_message = await message_queue.send_immediate_message(
+        # Send initial message directly to get real Telegram message ID.
+        # Uses the Bot API 10.1 rich-message endpoint so the whole /dump status
+        # message (this send plus every worker edit) renders as rich text.
+        initial_message = await message_queue.send_immediate_rich_message(
             chat_id=chat.id,
             text=initial_text,
             reply_to_message_id=None if use_privdump else message.message_id
@@ -137,6 +139,8 @@ async def dump(
         enhanced_job_data = job.model_dump()
         # Store initial text so the worker can re-edit it during Telegram context verification
         enhanced_job_data["_queued_text"] = initial_text
+        # Flag the job so its status edits keep using the rich-message endpoints.
+        enhanced_job_data["_rich_status"] = True
         enhanced_job_data["metadata"] = {
             "telegram_context": {
                 "chat_id": chat.id,

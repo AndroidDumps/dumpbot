@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from rich.console import Console
 
-from dumpyarabot.config import settings
+from dumpyarabot.config import settings, RICH_MARKDOWN_PARSE_MODE
 from dumpyarabot.firmware_downloader import FirmwareDownloader
 from dumpyarabot.firmware_extractor import FirmwareExtractor
 from dumpyarabot.gitlab_manager import GitLabManager
@@ -158,6 +158,19 @@ def _status_update_sequence(progress: Optional[Dict[str, Any]]) -> float:
     return 0.0
 
 
+def _status_parse_mode(job_data: Dict[str, Any]) -> str:
+    """Pick the parse mode for a job's status edits.
+
+    Direct ``/dump`` jobs post their status message via sendRichMessage and set
+    ``_rich_status``; their edits must stay on the rich-text endpoints. Moderated
+    requests (which create a legacy-Markdown status message elsewhere) keep using
+    the legacy parse mode.
+    """
+    if job_data.get("_rich_status"):
+        return RICH_MARKDOWN_PARSE_MODE
+    return settings.DEFAULT_PARSE_MODE
+
+
 async def _send_status_update(
     job_data: Dict[str, Any],
     message: str,
@@ -219,7 +232,7 @@ async def _send_status_update(
             chat_id=chat_id,
             text=formatted_message,
             edit_message_id=initial_message_id,
-            parse_mode=settings.DEFAULT_PARSE_MODE,
+            parse_mode=_status_parse_mode(job_data),
             context={
                 "job_id": job_data["job_id"],
                 "worker_id": "arq_worker",
@@ -337,7 +350,7 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
                 chat_id=chat_id,
                 text=formatted_message,
                 edit_message_id=initial_message_id,
-                parse_mode=settings.DEFAULT_PARSE_MODE,
+                parse_mode=_status_parse_mode(job_data),
                 context={"job_id": job_data.get("job_id", "unknown"), "type": "failure"}
             )
 
