@@ -1,11 +1,14 @@
 import os
 import sys
+import logging
 
+from telegram.error import TelegramError
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
-                          CommandHandler, MessageHandler, filters, JobQueue)
+                          CommandHandler, ContextTypes, MessageHandler,
+                          filters, JobQueue)
 
 from dumpyarabot.handlers import cancel_dump, clear_queue, dump, help_command, restart, status
-from dumpyarabot.message_queue import message_queue
+from dumpyarabot.message_queue import message_queue, sanitize_telegram_error
 from dumpyarabot.mockup_handlers import (handle_enhanced_callback_query,
                                          mockup_command)
 from dumpyarabot.moderated_handlers import (accept_command,
@@ -105,6 +108,39 @@ async def _shutdown_runtime(application):
         pass
 
 
+async def _handle_application_error(
+    update: object, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Write a short line for a failure in the poll loop or in a handler.
+
+    Without this handler, the library writes the full body of the error. A
+    proxy can send an HTML error page that is more than 700 lines long.
+
+    Args:
+        update: The update that caused the failure. The update can be None if
+            the failure occurred in the poll loop.
+        context: The context that holds the error in its error field.
+    """
+    from rich.console import Console
+
+    if isinstance(context.error, TelegramError):
+        Console().print(
+            f"Telegram application error: {sanitize_telegram_error(context.error)}",
+            style="red",
+            markup=False,
+        )
+        return
+
+    logging.getLogger(__name__).error(
+        "Unhandled application error",
+        exc_info=(
+            type(context.error),
+            context.error,
+            context.error.__traceback__,
+        ),
+    )
+
+
 async def register_bot_commands(application):
     """Register bot commands with Telegram for the menu interface."""
     from dumpyarabot.config import USER_COMMANDS
@@ -163,6 +199,7 @@ if __name__ == "__main__":
     application.add_handler(callback_handler)
     application.add_handler(restart_handler)
     application.add_handler(clearqueue_handler)
+    application.add_error_handler(_handle_application_error)
 
     application.post_init = _startup_init
     application.post_shutdown = _shutdown_runtime

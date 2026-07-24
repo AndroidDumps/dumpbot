@@ -1,9 +1,10 @@
 import asyncio
 import base64
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, List
+from typing import Any, Awaitable, Dict, Optional, List, TypeVar
 
 import redis.asyncio as redis
 from pydantic import BaseModel, Field, model_validator
@@ -12,10 +13,64 @@ from telegram import Bot
 from telegram.error import RetryAfter, TelegramError, NetworkError, BadRequest
 import telegram
 
+from dumpyarabot import lua_scripts
 from dumpyarabot.config import settings
 from dumpyarabot.schemas import DumpArguments, DumpJob, JobCancelResult, JobProgress, JobStatus
 
 console = Console()
+
+_T = TypeVar("_T")
+
+# Keep the edit-order keys for 15 days. A job can run for hours, thus the keys
+# must live longer than the longest job.
+_EDIT_STATE_TTL_SECONDS: int = 15 * 24 * 3600
+
+
+def sanitize_telegram_error(error: BaseException, max_snippet_chars: int = 200) -> str:
+    """Make a Telegram error short and safe for the journal.
+
+    A proxy can send an HTML error page in place of JSON. Such a page can be
+    more than 700 lines long. Write only the status code and a short part of
+    the body, thus one failure cannot fill the journal.
+
+    Args:
+        error: The error to make short.
+        max_snippet_chars: The maximum number of characters to keep.
+
+    Returns:
+        One line of text. The line contains the error type, the status code
+        if the error has one, and a short part of the body.
+    """
+    error_text = str(error)
+    # Read the status code only from the start of the message. The library
+    # writes the code as "Bad Gateway (502)." before the body. A body can
+    # contain other numbers in brackets, thus a search of the full text can
+    # find the wrong code.
+    status_match = re.match(r"[^(]{0,60}\((\d{3})\)\.", error_text)
+    status = f"HTTP {status_match.group(1)}; " if status_match else ""
+
+    html_match = re.search(r"(?i)(?:<!doctype\s+html|<html\b)", error_text)
+    parse_failure_match = re.search(
+        r"(?is)Parsing the server response\s+(.+?)\s+failed(?:\.|$)",
+        error_text,
+    )
+    if html_match or parse_failure_match:
+        if html_match:
+            snippet = error_text[html_match.start():]
+            response_kind = "non-JSON/HTML"
+        else:
+            snippet = parse_failure_match.group(1)
+            response_kind = "non-JSON"
+        snippet = snippet.replace("\\r", " ").replace("\\n", " ").replace("\\t", " ")
+        snippet = re.sub(r"\s+", " ", snippet).strip()
+        if len(snippet) > max_snippet_chars:
+            snippet = f"{snippet[:max_snippet_chars].rstrip()}…"
+        return f"{type(error).__name__}: {status}{response_kind} response: {snippet}"
+
+    compact = re.sub(r"\s+", " ", error_text).strip()
+    if len(compact) > max_snippet_chars:
+        compact = f"{compact[:max_snippet_chars].rstrip()}…"
+    return f"{type(error).__name__}: {compact}"
 
 
 class MessageType(str, Enum):
@@ -55,6 +110,7 @@ class QueuedMessage(BaseModel):
     disable_web_page_preview: Optional[bool] = None
     retry_count: int = 0
     max_retries: int = 3
+    edit_sequence: Optional[int] = None
     created_at: datetime
     scheduled_for: Optional[datetime] = None
     context: Dict[str, Any] = Field(default_factory=dict)
@@ -110,6 +166,152 @@ class MessageQueue:
         """Create Redis key for the latest rendered Telegram status text."""
         return f"{settings.REDIS_KEY_PREFIX}job_status_text:{job_id}"
 
+    def _make_edit_sequence_key(self, chat_id: int, edit_message_id: int) -> str:
+        """Make the Redis key that holds the edit counter for one message.
+
+        Args:
+            chat_id: The Telegram chat that holds the message.
+            edit_message_id: The Telegram message that the bot edits.
+
+        Returns:
+            The Redis key of the counter.
+        """
+        return f"{settings.REDIS_KEY_PREFIX}msg_edit_seq:{chat_id}:{edit_message_id}"
+
+    def _make_edit_applied_key(self, chat_id: int, edit_message_id: int) -> str:
+        """Make the Redis key that holds the watermark for one message.
+
+        The watermark is the order number of the last edit that Telegram
+        accepted.
+
+        Args:
+            chat_id: The Telegram chat that holds the message.
+            edit_message_id: The Telegram message that the bot edits.
+
+        Returns:
+            The Redis key of the watermark.
+        """
+        return f"{settings.REDIS_KEY_PREFIX}msg_edit_applied:{chat_id}:{edit_message_id}"
+
+    async def _stamp_edit_sequence(self, message: QueuedMessage) -> None:
+        """Give an order number to an edit that does not have one.
+
+        Redis does the increment. Thus each edit gets a different number, even
+        if more than one worker sends edits at the same time. A retry of an
+        edit that has a number keeps that number. Thus an old edit cannot get
+        a new number and move in front of a later edit.
+
+        If Redis lost the counter key but kept the watermark key, the script
+        starts the counter at the watermark. Thus the bot cannot discard all
+        later edits.
+
+        Args:
+            message: The message to change. The function sets the
+                edit_sequence field of this message.
+        """
+        if message.edit_message_id is None or message.edit_sequence is not None:
+            return
+        redis_client = await self._get_redis()
+        message.edit_sequence = int(
+            await redis_client.eval(
+                lua_scripts.STAMP_EDIT_SEQUENCE,
+                2,
+                self._make_edit_sequence_key(message.chat_id, message.edit_message_id),
+                self._make_edit_applied_key(message.chat_id, message.edit_message_id),
+                _EDIT_STATE_TTL_SECONDS,
+            )
+        )
+
+    async def _is_stale_edit(self, message: QueuedMessage) -> bool:
+        """Tell if a later edit replaced this edit.
+
+        Example: step 20 of 25 fails and waits for a retry. Step 21 of 25
+        then succeeds. Step 20 is now too old. If the bot sent step 20, the
+        display would move to the rear.
+
+        An edit that a version before this one put in the queue has no order
+        number. The bot cannot compare such an edit with the watermark. If
+        Telegram accepted an edit for the same message, that edit is more
+        recent than the edit with no number. Thus the bot discards the edit
+        with no number. If Telegram accepted no edit, there is no watermark
+        and the bot sends the edit.
+
+        Args:
+            message: The message to examine.
+
+        Returns:
+            True if a later edit replaced this edit. False if the edit is
+            current, or if the message is not an edit.
+        """
+        if message.edit_message_id is None:
+            return False
+        if message.edit_sequence is None:
+            redis_client = await self._get_redis()
+            applied = await redis_client.get(
+                self._make_edit_applied_key(message.chat_id, message.edit_message_id)
+            )
+            return applied is not None
+        redis_client = await self._get_redis()
+        return bool(
+            await redis_client.eval(
+                lua_scripts.IS_STALE_EDIT,
+                1,
+                self._make_edit_applied_key(message.chat_id, message.edit_message_id),
+                message.edit_sequence,
+            )
+        )
+
+    async def _mark_edit_applied(self, message: QueuedMessage) -> None:
+        """Move the watermark forward after Telegram accepts an edit.
+
+        The script writes only if the order number is larger than the
+        watermark. Thus a slow edit that arrives late cannot move the
+        watermark to the rear.
+
+        Args:
+            message: The message that Telegram accepted.
+        """
+        if message.edit_message_id is None or message.edit_sequence is None:
+            return
+        redis_client = await self._get_redis()
+        await redis_client.eval(
+            lua_scripts.MARK_EDIT_APPLIED,
+            1,
+            self._make_edit_applied_key(message.chat_id, message.edit_message_id),
+            message.edit_sequence,
+            _EDIT_STATE_TTL_SECONDS,
+        )
+
+    async def _call_telegram(self, operation: Awaitable[_T], timeout: float) -> _T:
+        """Send a request to Telegram with a limit on the total time.
+
+        The read timeout and the write timeout of the HTTP client apply to
+        one socket operation only. A slow proxy can send a small quantity of
+        data again and again. Each part starts the socket timeout again, thus
+        the request can continue for an unlimited time. The consumer sends
+        one message at a time. Thus one such request stops all messages.
+
+        This function puts a limit on the total time. If the limit passes,
+        the function raises NetworkError. The usual retry code then does the
+        retry.
+
+        Args:
+            operation: The Telegram request to send.
+            timeout: The maximum number of seconds to wait.
+
+        Returns:
+            The result of the Telegram request.
+
+        Raises:
+            NetworkError: If the request does not complete before the limit.
+        """
+        try:
+            return await asyncio.wait_for(operation, timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise NetworkError(
+                f"Telegram request exceeded hard deadline of {timeout:.1f}s"
+            ) from exc
+
     async def store_latest_status_text(
         self,
         job_id: str,
@@ -118,7 +320,19 @@ class MessageQueue:
         sequence: Optional[float] = None,
         timestamp: Optional[float] = None
     ) -> None:
-        """Persist the latest rendered status text so retries can preserve display state."""
+        """Keep the most recent status text of a job.
+
+        A retry can send text that is too old. The consumer reads this text
+        before it sends an edit, thus the display shows the correct step.
+
+        Args:
+            job_id: The job that the text belongs to.
+            text: The text to keep.
+            ttl_seconds: The time to keep the text, in seconds.
+            sequence: The order number of the text. The default is 0.
+            timestamp: The time of the text, as a UNIX time. The default is
+                the time now.
+        """
         redis_client = await self._get_redis()
         if sequence is None:
             sequence = 0.0
@@ -127,33 +341,7 @@ class MessageQueue:
 
         value = f"v1\n{float(sequence)}\n{float(timestamp)}\n{text}"
         await redis_client.eval(
-            """
-            local current = redis.call('GET', KEYS[1])
-            local next_seq = tonumber(ARGV[1])
-            local next_ts = tonumber(ARGV[2])
-            local ttl = tonumber(ARGV[3])
-
-            local current_seq = nil
-            local current_ts = nil
-            if current and string.sub(current, 1, 3) == "v1\\n" then
-                local rest = string.sub(current, 4)
-                local first_newline = string.find(rest, "\\n", 1, true)
-                if first_newline then
-                    current_seq = tonumber(string.sub(rest, 1, first_newline - 1))
-                    local rest_after_seq = string.sub(rest, first_newline + 1)
-                    local second_newline = string.find(rest_after_seq, "\\n", 1, true)
-                    if second_newline then
-                        current_ts = tonumber(string.sub(rest_after_seq, 1, second_newline - 1))
-                    end
-                end
-            end
-
-            if not current_seq or next_seq > current_seq or (next_seq == current_seq and (not current_ts or next_ts >= current_ts)) then
-                redis.call('SET', KEYS[1], ARGV[4], 'EX', ttl)
-                return 1
-            end
-            return 0
-            """,
+            lua_scripts.STORE_LATEST_STATUS_TEXT,
             1,
             self._make_status_text_key(job_id),
             float(sequence),
@@ -163,7 +351,14 @@ class MessageQueue:
         )
 
     async def get_latest_status_text(self, job_id: str) -> Optional[str]:
-        """Fetch the latest rendered status text for a job."""
+        """Get the most recent status text of a job.
+
+        Args:
+            job_id: The job to get the text for.
+
+        Returns:
+            The text, or None if Redis holds no text for the job.
+        """
         redis_client = await self._get_redis()
         value = await redis_client.get(self._make_status_text_key(job_id))
         if value is None:
@@ -215,6 +410,8 @@ class MessageQueue:
         """Publish a message to the appropriate priority queue and return message_id."""
         redis_client = await self._get_redis()
         queue_key = self._make_queue_key(message.priority)
+
+        await self._stamp_edit_sequence(message)
 
         # Serialize message
         message_json = message.model_dump_json()
@@ -377,12 +574,15 @@ class MessageQueue:
 
         console.print(f"[blue]Sending immediate message to chat {chat_id} with parse_mode={parse_mode}[/blue]")
 
-        message = await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode=parse_mode,
-            reply_to_message_id=reply_to_message_id,
-            disable_web_page_preview=disable_web_page_preview
+        message = await self._call_telegram(
+            bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id,
+                disable_web_page_preview=disable_web_page_preview
+            ),
+            settings.TELEGRAM_TEXT_REQUEST_TIMEOUT,
         )
 
         console.print(f"[green]Sent immediate message {message.message_id} to chat {chat_id}[/green]")
@@ -581,24 +781,37 @@ class MessageQueue:
                     f"via {'custom API base URL' if settings.TELEGRAM_API_BASE_URL else 'default Telegram API'}[/blue]"
                 )
 
-                await self._bot.send_document(
-                    chat_id=message.chat_id,
-                    document=InputFile(
-                        io.BytesIO(document_bytes),
-                        filename=message.document_filename,
+                await self._call_telegram(
+                    self._bot.send_document(
+                        chat_id=message.chat_id,
+                        document=InputFile(
+                            io.BytesIO(document_bytes),
+                            filename=message.document_filename,
+                        ),
+                        caption=message.caption,
+                        parse_mode=message.parse_mode,
+                        read_timeout=settings.TELEGRAM_DOCUMENT_READ_TIMEOUT,
+                        write_timeout=settings.TELEGRAM_DOCUMENT_WRITE_TIMEOUT,
                     ),
-                    caption=message.caption,
-                    parse_mode=message.parse_mode,
-                    read_timeout=settings.TELEGRAM_DOCUMENT_READ_TIMEOUT,
-                    write_timeout=settings.TELEGRAM_DOCUMENT_WRITE_TIMEOUT,
+                    settings.TELEGRAM_DOCUMENT_REQUEST_TIMEOUT,
                 )
                 console.print(f"[green]Successfully processed {message.type.value} message[/green]")
                 return True
 
-            # For job-status edits, the queued text can be stale by the time it's
-            # dispatched (FIFO drain + RetryAfter requeues). Always pull the latest
-            # rendered text for the job so a delayed edit can't roll the display back
-            # to an old phase. Fall back to the queued text if no live state exists.
+            # Drop the edit if a later edit replaced it. Do this before the
+            # request to Telegram, thus the display cannot move to the rear.
+            if await self._is_stale_edit(message):
+                console.print(
+                    f"[dim]Dropping superseded edit {message.message_id} "
+                    f"(sequence {message.edit_sequence})[/dim]"
+                )
+                return True
+
+            # The text in the queue can be too old when the consumer sends it.
+            # The queue is FIFO, and a RetryAfter error puts a message in the
+            # queue again. Get the most recent text for the job, thus a late
+            # edit cannot show an earlier step. If no text is available, use
+            # the text from the queue.
             text = message.text
             if message.edit_message_id:
                 job_id = (message.context or {}).get("job_id")
@@ -633,7 +846,11 @@ class MessageQueue:
                 kwargs["message_id"] = message.edit_message_id
                 del kwargs["chat_id"]  # edit_message_text uses chat_id differently
                 kwargs["chat_id"] = message.chat_id
-                await self._bot.edit_message_text(**kwargs)
+                await self._call_telegram(
+                    self._bot.edit_message_text(**kwargs),
+                    settings.TELEGRAM_TEXT_REQUEST_TIMEOUT,
+                )
+                await self._mark_edit_applied(message)
             else:
                 # Send new message
                 if message.reply_parameters:
@@ -646,7 +863,10 @@ class MessageQueue:
                 elif message.reply_to_message_id:
                     kwargs["reply_to_message_id"] = message.reply_to_message_id
 
-                sent_message = await self._bot.send_message(**kwargs)
+                sent_message = await self._call_telegram(
+                    self._bot.send_message(**kwargs),
+                    settings.TELEGRAM_TEXT_REQUEST_TIMEOUT,
+                )
 
                 # Handle auto-delete if specified
                 if message.delete_after:
@@ -667,16 +887,22 @@ class MessageQueue:
         except BadRequest as e:
             error_text = str(e)
             if "message is not modified" in error_text.lower():
+                await self._mark_edit_applied(message)
                 console.print("[yellow]Skipping no-op edit: message content is unchanged[/yellow]")
                 return True
 
             if message.type == MessageType.DOCUMENT:
                 console.print(
-                    f"[red]Telegram sendDocument bad request for '{message.document_filename}' "
-                    f"to chat {message.chat_id}: {type(e).__name__}: {e}[/red]"
+                    f"Telegram sendDocument bad request for '{message.document_filename}' "
+                    f"to chat {message.chat_id}: {sanitize_telegram_error(e)}",
+                    style="red",
+                    markup=False,
                 )
-                console.print_exception()
-            console.print(f"[red]Telegram bad request processing message: {e}[/red]")
+            console.print(
+                f"Telegram bad request processing message: {sanitize_telegram_error(e)}",
+                style="red",
+                markup=False,
+            )
             return False
 
         except NetworkError as e:
@@ -688,13 +914,18 @@ class MessageQueue:
                     except Exception:
                         pass
                 console.print(
-                    f"[yellow]sendDocument network error for '{message.document_filename}' "
+                    f"sendDocument network error for '{message.document_filename}' "
                     f"({document_size} bytes) to chat {message.chat_id} via "
                     f"{'custom API base URL' if settings.TELEGRAM_API_BASE_URL else 'default Telegram API'}: "
-                    f"{type(e).__name__}: {e}[/yellow]"
+                    f"{sanitize_telegram_error(e)}",
+                    style="yellow",
+                    markup=False,
                 )
-                console.print_exception()
-            console.print(f"[yellow]Network error processing message: {e}[/yellow]")
+            console.print(
+                f"Network error processing message: {sanitize_telegram_error(e)}",
+                style="yellow",
+                markup=False,
+            )
             message.retry_count += 1
             if message.retry_count <= message.max_retries:
                 retry_delay = min(30 * (2 ** (message.retry_count - 1)), 300)
@@ -713,11 +944,19 @@ class MessageQueue:
             return True
 
         except TelegramError as e:
-            console.print(f"[red]Telegram API error processing message: {e}[/red]")
+            console.print(
+                f"Telegram API error processing message: {sanitize_telegram_error(e)}",
+                style="red",
+                markup=False,
+            )
             return False
 
         except Exception as e:
-            console.print(f"[red]Unexpected error processing message: {e}[/red]")
+            console.print(
+                f"Unexpected error processing message: {sanitize_telegram_error(e)}",
+                style="red",
+                markup=False,
+            )
             return False
 
     async def _handle_failed_message(self, message: QueuedMessage) -> None:
@@ -735,13 +974,57 @@ class MessageQueue:
             await self._move_to_dead_letter_queue(message)
 
     async def _requeue_message(self, message: QueuedMessage) -> None:
-        """Re-queue a message, potentially with a delay."""
+        """Put a message in the queue again, with a delay if necessary.
+
+        For an edit, compare the order number with the watermark first. If a
+        later edit replaced this edit, discard the message. One Lua script
+        does the compare and the write, thus no other worker can change the
+        watermark between the two steps.
+
+        Args:
+            message: The message to put in the queue again. If the
+                scheduled_for field is in the future, the message goes to the
+                delayed set. If not, the message goes to its priority queue.
+        """
+        await self._stamp_edit_sequence(message)
+        message_json = message.model_dump_json()
+
+        if message.edit_message_id is not None and message.edit_sequence is not None:
+            redis_client = await self._get_redis()
+            destination_key: str
+            destination_type: str
+            score: float = 0.0
+            if message.scheduled_for and message.scheduled_for > datetime.now(timezone.utc):
+                destination_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
+                destination_type = "zset"
+                score = message.scheduled_for.timestamp()
+            else:
+                destination_key = self._make_queue_key(message.priority)
+                destination_type = "list"
+
+            queued = await redis_client.eval(
+                lua_scripts.REQUEUE_EDIT_IF_CURRENT,
+                2,
+                self._make_edit_applied_key(message.chat_id, message.edit_message_id),
+                destination_key,
+                message.edit_sequence,
+                destination_type,
+                score,
+                message_json,
+            )
+            if not queued:
+                console.print(
+                    f"[dim]Dropping superseded retry {message.message_id} "
+                    f"(sequence {message.edit_sequence})[/dim]"
+                )
+            return
+
         if message.scheduled_for and message.scheduled_for > datetime.now(timezone.utc):
             # Use Redis to schedule the message
             redis_client = await self._get_redis()
             delay_key = f"{settings.REDIS_KEY_PREFIX}delayed_messages"
             score = message.scheduled_for.timestamp()
-            await redis_client.zadd(delay_key, {message.model_dump_json(): score})
+            await redis_client.zadd(delay_key, {message_json: score})
         else:
             # Re-queue immediately
             await self.publish(message)
@@ -757,13 +1040,26 @@ class MessageQueue:
         console.print(f"[red]Dead letter queue now has {dlq_size} message(s) - check with /status[/red]")
 
     async def _auto_delete_message(self, chat_id: int, message_id: int, delay: int) -> None:
-        """Auto-delete a message after the specified delay."""
+        """Delete a message after a delay.
+
+        Args:
+            chat_id: The Telegram chat that holds the message.
+            message_id: The message to delete.
+            delay: The number of seconds to wait before the deletion.
+        """
         await asyncio.sleep(delay)
         try:
-            await self._bot.delete_message(chat_id=chat_id, message_id=message_id)
+            await self._call_telegram(
+                self._bot.delete_message(chat_id=chat_id, message_id=message_id),
+                settings.TELEGRAM_TEXT_REQUEST_TIMEOUT,
+            )
             console.print(f"[green]Auto-deleted message {message_id} from chat {chat_id}[/green]")
         except Exception as e:
-            console.print(f"[yellow]Failed to auto-delete message {message_id}: {e}[/yellow]")
+            console.print(
+                f"Failed to auto-delete message {message_id}: {sanitize_telegram_error(e)}",
+                style="yellow",
+                markup=False,
+            )
 
     async def get_queue_stats(self) -> Dict[str, int]:
         """Get statistics about the message queues."""
@@ -882,12 +1178,20 @@ class MessageQueue:
             probe_text = job_data.get("_queued_text", f"\u23f3 Job `{job_id}` starting...")
 
         try:
-            await bot.edit_message_text(
-                chat_id=initial_chat_id,
-                message_id=initial_message_id,
-                text=probe_text,
-                parse_mode=settings.DEFAULT_PARSE_MODE,
-                disable_web_page_preview=True,
+            # Use a time limit here too. This code runs in the worker before
+            # the dump starts. Without a limit, a slow Telegram API server
+            # keeps the worker for as much as job_timeout. The worker can
+            # then start no other job. A NetworkError from the limit goes to
+            # the TelegramError block below, thus the job continues.
+            await self._call_telegram(
+                bot.edit_message_text(
+                    chat_id=initial_chat_id,
+                    message_id=initial_message_id,
+                    text=probe_text,
+                    parse_mode=settings.DEFAULT_PARSE_MODE,
+                    disable_web_page_preview=True,
+                ),
+                settings.TELEGRAM_TEXT_REQUEST_TIMEOUT,
             )
         except Forbidden as e:
             raise RuntimeError(f"Telegram context invalid (bot blocked/forbidden): {e}") from e
