@@ -10,21 +10,28 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from rich.console import Console
 
+from dumpyarabot.aria2_manager import DownloadProgress
 from dumpyarabot.config import settings
 from dumpyarabot.firmware_downloader import FirmwareDownloader
 from dumpyarabot.firmware_extractor import FirmwareExtractor
-from dumpyarabot.gitlab_manager import GitLabManager
-from dumpyarabot.schemas import DumpJob
+from dumpyarabot.gitlab_manager import (
+    GITLAB_BASE_URL,
+    GitLabManager,
+    gitlab_http_client,
+)
+from dumpyarabot.message_formatting import (
+    format_comprehensive_progress_message,
+    format_download_progress,
+)
 from dumpyarabot.message_queue import message_queue
-from dumpyarabot.property_extractor import PropertyExtractor
 from dumpyarabot.process_utils import reset_current_job_id, set_current_job_id
-from dumpyarabot.aria2_manager import DownloadProgress
-from dumpyarabot.message_formatting import format_comprehensive_progress_message, format_download_progress
+from dumpyarabot.property_extractor import PropertyExtractor
+from dumpyarabot.schemas import DumpJob
 
 console = Console()
 
@@ -366,10 +373,9 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
 
 async def _validate_gitlab_access() -> None:
     """Validate GitLab server access - from original worker logic."""
-    import httpx
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get("https://dumps.tadiphone.dev", timeout=10.0)
+        async with gitlab_http_client() as client:
+            response = await client.get(GITLAB_BASE_URL, timeout=10.0)
             if response.status_code >= 400:
                 raise Exception(f"GitLab server returned {response.status_code}")
             console.print("[green]GitLab server access validated[/green]")

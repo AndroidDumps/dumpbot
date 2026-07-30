@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # Gitlab API Token
     DUMPER_TOKEN: str
+    # Keep TLS verification on. Disable it only for a temporary certificate
+    # problem on the trusted GitLab server.
+    GITLAB_VERIFY_SSL: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
