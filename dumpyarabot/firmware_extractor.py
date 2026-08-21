@@ -43,7 +43,7 @@ class FirmwareExtractor:
         """Extract using the modern Python dumpyara tool."""
         result = await run_command(
             "uvx", "--from",
-            "git+https://github.com/deadman96385/dumpyara@76ba03afdf5e8fe59ea4f0c3dd04d649423c5efd",
+            "git+https://github.com/deadman96385/dumpyara@0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8",
             "dumpyara", firmware_path, "-o", str(self.work_dir),
             cwd=self.work_dir,
             timeout=ONE_HOUR,
