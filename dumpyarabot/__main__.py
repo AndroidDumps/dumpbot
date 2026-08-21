@@ -158,6 +158,15 @@ async def register_bot_commands_job(context):
 
 if __name__ == "__main__":
     builder = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).job_queue(JobQueue())
+    # Set the HTTP client timeouts for the main bot request. The default values
+    # are too short for a slow proxy. These methods change only the main bot
+    # request. They do not change the get_updates request that the poller uses.
+    builder = (
+        builder.connect_timeout(settings.TELEGRAM_HTTPX_CONNECT_TIMEOUT)
+        .read_timeout(settings.TELEGRAM_HTTPX_READ_TIMEOUT)
+        .write_timeout(settings.TELEGRAM_HTTPX_WRITE_TIMEOUT)
+        .pool_timeout(settings.TELEGRAM_HTTPX_POOL_TIMEOUT)
+    )
     if settings.TELEGRAM_API_BASE_URL:
         base = settings.TELEGRAM_API_BASE_URL.rstrip("/")
         builder = builder.base_url(f"{base}/bot").base_file_url(f"{base}/file/bot")

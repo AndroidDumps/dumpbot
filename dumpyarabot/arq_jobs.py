@@ -190,6 +190,15 @@ async def _send_status_update(
     initial_message_id = job_data.get("initial_message_id")
     initial_chat_id = job_data.get("initial_chat_id")
 
+    # A retry or a crash recovery can reload the job without the status message
+    # reference. Look for a message that the worker made before.
+    if not initial_message_id or not initial_chat_id:
+        ref = await message_queue.get_status_message_ref(str(job_data.get("job_id", "")))
+        if ref:
+            initial_chat_id, initial_message_id = ref
+            job_data["initial_message_id"] = initial_message_id
+            job_data["initial_chat_id"] = initial_chat_id
+
     if not initial_message_id or not initial_chat_id:
         console.print(f"[red]ERROR: Job {job_data['job_id']} missing initial message reference! Cannot send updates.[/red]")
         return
@@ -312,6 +321,15 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
         # PRESERVE: Check for required message context
         initial_message_id = job_data.get("initial_message_id")
         initial_chat_id = job_data.get("initial_chat_id")
+
+        # A retry or a crash recovery can reload the job without the status
+        # message reference. Look for a message that the worker made before.
+        if not initial_message_id or not initial_chat_id:
+            ref = await message_queue.get_status_message_ref(str(job_data.get("job_id", "unknown")))
+            if ref:
+                initial_chat_id, initial_message_id = ref
+                job_data["initial_message_id"] = initial_message_id
+                job_data["initial_chat_id"] = initial_chat_id
 
         if not initial_message_id or not initial_chat_id:
             console.print(f"[red]ERROR: Job {job_data.get('job_id', 'unknown')} missing initial message reference! Cannot send failure update.[/red]")

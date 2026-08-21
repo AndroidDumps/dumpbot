@@ -33,6 +33,19 @@ class Settings(BaseSettings):
     TELEGRAM_DOCUMENT_WRITE_TIMEOUT: float = 120.0
     TELEGRAM_DOCUMENT_REQUEST_TIMEOUT: float = 255.0
 
+    # Timeouts for the HTTP client that talks to Telegram (seconds).
+    # These set the httpx socket timeouts. They are not the same as the
+    # TELEGRAM_*_REQUEST_TIMEOUT values above. Those values set a hard deadline
+    # for the whole call. The default httpx timeouts of python-telegram-bot are
+    # 5s to connect, 5s to read, 5s to write, and 1s for the pool. These
+    # defaults are too short when the bot reaches Telegram through a slow proxy
+    # (TELEGRAM_API_BASE_URL). Larger values stop a slow proxy from making a
+    # call fail too early.
+    TELEGRAM_HTTPX_CONNECT_TIMEOUT: float = 20.0
+    TELEGRAM_HTTPX_READ_TIMEOUT: float = 60.0
+    TELEGRAM_HTTPX_WRITE_TIMEOUT: float = 60.0
+    TELEGRAM_HTTPX_POOL_TIMEOUT: float = 20.0
+
     # Optional custom base URL for Telegram Bot API (e.g. nginx reverse proxy)
     # Default: https://api.telegram.org/bot
     TELEGRAM_API_BASE_URL: Optional[str] = None

@@ -1,19 +1,71 @@
+import asyncio
 import secrets
 from typing import Optional
 
 from rich.console import Console
 from telegram import Chat, Message, Update
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
 from dumpyarabot import schemas, utils, url_utils
 from dumpyarabot.utils import escape_markdown
 from dumpyarabot.config import settings
-from dumpyarabot.auth import check_admin_permissions
+from dumpyarabot.auth import VERIFICATION_FAILED_MESSAGE, check_admin_permissions
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.message_formatting import generate_progress_bar
 from dumpyarabot.schemas import JobCancelResult
 
 console = Console()
+
+# How many times to try to send the first status message before the bot gives
+# up and queues the job without it.
+INITIAL_MESSAGE_SEND_ATTEMPTS = 3
+# How long to wait between two tries (seconds).
+INITIAL_MESSAGE_RETRY_DELAY = 2.0
+
+
+async def _send_initial_message_with_retry(
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None,
+) -> Message | None:
+    """Send the first status message and retry after a network error.
+
+    The bot reaches Telegram through a proxy. The proxy can be slow. A slow
+    proxy makes the send time out. This function tries the send again a few
+    times.
+
+    Returns the Telegram message when the send works. Returns None when every
+    try fails with a network error. The caller must then queue the job without
+    the message. A different error goes up to the caller.
+    """
+    last_error: NetworkError | None = None
+    for attempt in range(1, INITIAL_MESSAGE_SEND_ATTEMPTS + 1):
+        try:
+            return await message_queue.send_immediate_message(
+                chat_id=chat_id,
+                text=text,
+                reply_to_message_id=reply_to_message_id,
+            )
+        except BadRequest:
+            # BadRequest is a NetworkError subclass, but it is not transient.
+            # A bad request (for example a Markdown error) fails every time.
+            # Do not retry it. Let it go up to the caller.
+            raise
+        except NetworkError as e:
+            last_error = e
+            console.print(
+                f"[yellow]Initial message send timed out "
+                f"(attempt {attempt}/{INITIAL_MESSAGE_SEND_ATTEMPTS}): {e}[/yellow]"
+            )
+            if attempt < INITIAL_MESSAGE_SEND_ATTEMPTS:
+                await asyncio.sleep(INITIAL_MESSAGE_RETRY_DELAY)
+
+    console.print(
+        f"[red]Initial message send failed after "
+        f"{INITIAL_MESSAGE_SEND_ATTEMPTS} attempts: {last_error}[/red]"
+    )
+    return None
 
 
 async def dump(
@@ -122,15 +174,28 @@ async def dump(
         initial_text += "*Elapsed:* 0s\n"
         initial_text += " *Worker:* Waiting for assignment...\n"
 
-        # Send initial message directly to get real Telegram message ID
-        initial_message = await message_queue.send_immediate_message(
+        # Send the first status message directly to get the real Telegram
+        # message ID. Retry after a network error. A slow proxy can make this
+        # send time out even when the message arrives.
+        initial_message = await _send_initial_message_with_retry(
             chat_id=chat.id,
             text=initial_text,
-            reply_to_message_id=None if use_privdump else message.message_id
+            reply_to_message_id=None if use_privdump else message.message_id,
         )
 
-        # Store the REAL Telegram message ID in the job
-        job.initial_message_id = initial_message.message_id
+        # Keep the message ID when the send works. When every try fails, queue
+        # the job anyway. Do not lose the dump. The worker makes the status
+        # message when it starts the job. Keep the chat ID so the worker knows
+        # where to send that message.
+        initial_message_id = initial_message.message_id if initial_message else None
+        if initial_message is None:
+            console.print(
+                f"[yellow]Queueing dump job {job.job_id} without a status message. "
+                f"The worker will create one.[/yellow]"
+            )
+
+        # Store the message ID in the job. It is None when the send failed.
+        job.initial_message_id = initial_message_id
         job.initial_chat_id = chat.id
 
         # Create enhanced job data with metadata structure
@@ -140,7 +205,7 @@ async def dump(
         enhanced_job_data["metadata"] = {
             "telegram_context": {
                 "chat_id": chat.id,
-                "message_id": initial_message.message_id,
+                "message_id": initial_message_id,
                 "user_id": message.from_user.id if message.from_user else 0,
                 "url": normalized_url
             }
@@ -194,15 +259,24 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     # Check if the user is an admin
-    has_permission, error_message = await check_admin_permissions(update, context, require_admin=True)
-    if not has_permission:
-        console.print(
-            f"[yellow]Non-admin user {user.id} tried to use cancel command: {error_message}[/yellow]"
-        )
+    permission = await check_admin_permissions(update, context, require_admin=True)
+    if not permission.allowed:
+        if permission.verification_failed:
+            console.print(
+                f"[red]Cancel command: could not verify admin for user {user.id}: {permission.error}[/red]"
+            )
+            deny_text = VERIFICATION_FAILED_MESSAGE
+            error_kind = "verification_failed"
+        else:
+            console.print(
+                f"[yellow]Non-admin user {user.id} tried to use cancel command: {permission.error}[/yellow]"
+            )
+            deny_text = "You don't have permission to use this command"
+            error_kind = "permission_denied"
         await message_queue.send_error(
             chat_id=chat.id,
-            text="You don't have permission to use this command",
-            context={"command": "cancel", "user_id": user.id, "error": "permission_denied"}
+            text=deny_text,
+            context={"command": "cancel", "user_id": user.id, "error": error_kind}
         )
         return
 
@@ -336,8 +410,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Check if user is admin to show admin commands
-    has_permission, _ = await check_admin_permissions(update, context, require_admin=True)
-    is_admin = has_permission
+    # For the help listing we only need a best-effort admin flag; a transient
+    # verification failure just hides the admin commands, which is harmless.
+    is_admin = (await check_admin_permissions(update, context, require_admin=True)).allowed
 
     help_text = " *DumpyaraBot Command Help*\n\n"
 
@@ -395,13 +470,19 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # Check if the user is a Telegram admin in this chat
-    has_permission, error_message = await check_admin_permissions(update, context, require_admin=True)
-    if not has_permission:
-        console.print(f"[red]Error checking admin status: {error_message}[/red]")
+    permission = await check_admin_permissions(update, context, require_admin=True)
+    if not permission.allowed:
+        console.print(f"[red]Restart admin check failed: {permission.error}[/red]")
+        if permission.verification_failed:
+            text = f" {VERIFICATION_FAILED_MESSAGE}"
+            error_kind = "verification_failed"
+        else:
+            text = " You don't have permission to restart the bot. Only chat administrators can use this command."
+            error_kind = "permission_denied"
         await message_queue.send_error(
             chat_id=chat.id,
-            text=" You don't have permission to restart the bot. Only chat administrators can use this command.",
-            context={"command": "restart", "user_id": user.id, "error": "permission_denied"}
+            text=text,
+            context={"command": "restart", "user_id": user.id, "error": error_kind}
         )
         return
 
@@ -470,12 +551,19 @@ async def clear_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if chat.id not in settings.ALLOWED_CHATS:
         return
 
-    has_permission, _ = await check_admin_permissions(update, context, require_admin=True)
-    if not has_permission:
+    permission = await check_admin_permissions(update, context, require_admin=True)
+    if not permission.allowed:
+        if permission.verification_failed:
+            console.print(f"[red]Clearqueue admin check failed: {permission.error}[/red]")
+            text = VERIFICATION_FAILED_MESSAGE
+            error_kind = "verification_failed"
+        else:
+            text = "You don't have permission to use this command"
+            error_kind = "permission_denied"
         await message_queue.send_error(
             chat_id=chat.id,
-            text="You don't have permission to use this command",
-            context={"command": "clearqueue", "user_id": user.id, "error": "permission_denied"}
+            text=text,
+            context={"command": "clearqueue", "user_id": user.id, "error": error_kind}
         )
         return
 
@@ -527,12 +615,15 @@ async def handle_restart_callback(update: Update, context: ContextTypes.DEFAULT_
             return
 
         # Verify user is still a chat admin
-        has_permission, error_message = await check_admin_permissions(update, context, require_admin=True)
-        if not has_permission:
-            console.print(f"[red]Error checking admin status: {error_message}[/red]")
-            await query.edit_message_text(
-                " Permission denied. You are no longer a chat administrator."
-            )
+        permission = await check_admin_permissions(update, context, require_admin=True)
+        if not permission.allowed:
+            console.print(f"[red]Restart-confirm admin check failed: {permission.error}[/red]")
+            if permission.verification_failed:
+                await query.edit_message_text(f" {VERIFICATION_FAILED_MESSAGE}")
+            else:
+                await query.edit_message_text(
+                    " Permission denied. You are no longer a chat administrator."
+                )
             return
 
         # Confirm restart

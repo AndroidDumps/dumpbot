@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from telegram import Bot
 from telegram.error import RetryAfter, TelegramError, NetworkError, BadRequest
+from telegram.request import HTTPXRequest
 import telegram
 
 from dumpyarabot import lua_scripts
@@ -165,6 +166,10 @@ class MessageQueue:
     def _make_status_text_key(self, job_id: str) -> str:
         """Create Redis key for the latest rendered Telegram status text."""
         return f"{settings.REDIS_KEY_PREFIX}job_status_text:{job_id}"
+
+    def _make_status_message_ref_key(self, job_id: str) -> str:
+        """Create Redis key for a worker-created status message reference."""
+        return f"{settings.REDIS_KEY_PREFIX}job_status_msg_ref:{job_id}"
 
     def _make_edit_sequence_key(self, chat_id: int, edit_message_id: int) -> str:
         """Make the Redis key that holds the edit counter for one message.
@@ -370,12 +375,68 @@ class MessageQueue:
                 return parts[3]
         return value
 
+    async def store_status_message_ref(
+        self,
+        job_id: str,
+        chat_id: int,
+        message_id: int,
+        ttl_seconds: int = 15 * 24 * 3600,
+    ) -> None:
+        """Keep the chat ID and message ID of a status message.
+
+        The /dump handler can fail to send the first status message. The worker
+        then makes a new one. Keep its location here. A job retry or a crash
+        recovery can then edit the same message. This stops duplicate messages.
+
+        Args:
+            job_id: The job that the message belongs to.
+            chat_id: The chat that holds the message.
+            message_id: The message to edit later.
+            ttl_seconds: The time to keep the reference, in seconds.
+        """
+        redis_client = await self._get_redis()
+        await redis_client.set(
+            self._make_status_message_ref_key(job_id),
+            f"{int(chat_id)}:{int(message_id)}",
+            ex=int(ttl_seconds),
+        )
+
+    async def get_status_message_ref(self, job_id: str) -> tuple[int, int] | None:
+        """Get the stored status message location of a job.
+
+        Args:
+            job_id: The job to get the reference for.
+
+        Returns:
+            A (chat_id, message_id) pair, or None when Redis holds no reference.
+        """
+        redis_client = await self._get_redis()
+        value = await redis_client.get(self._make_status_message_ref_key(job_id))
+        if not value:
+            return None
+        try:
+            chat_part, message_part = str(value).split(":", 1)
+            return int(chat_part), int(message_part)
+        except (ValueError, TypeError):
+            return None
+
     async def _ensure_bot(self) -> Bot:
         """Return a usable Telegram bot instance, creating one if needed."""
         if self._bot:
             return self._bot
 
-        bot_kwargs = {"token": settings.TELEGRAM_BOT_TOKEN}
+        # Set the HTTP client timeouts for this bot. The default values are too
+        # short for a slow proxy. This bot sends the status messages and does
+        # the context checks, so it must survive a slow proxy.
+        bot_kwargs = {
+            "token": settings.TELEGRAM_BOT_TOKEN,
+            "request": HTTPXRequest(
+                connect_timeout=settings.TELEGRAM_HTTPX_CONNECT_TIMEOUT,
+                read_timeout=settings.TELEGRAM_HTTPX_READ_TIMEOUT,
+                write_timeout=settings.TELEGRAM_HTTPX_WRITE_TIMEOUT,
+                pool_timeout=settings.TELEGRAM_HTTPX_POOL_TIMEOUT,
+            ),
+        }
         if settings.TELEGRAM_API_BASE_URL:
             base = settings.TELEGRAM_API_BASE_URL.rstrip("/")
             bot_kwargs["base_url"] = f"{base}/bot"
@@ -1167,15 +1228,80 @@ class MessageQueue:
 
         initial_message_id = job_data.get("initial_message_id")
         initial_chat_id = job_data.get("initial_chat_id")
-        if not initial_message_id or not initial_chat_id:
+
+        telegram_context = (job_data.get("metadata") or {}).get("telegram_context") or {}
+        target_chat_id = initial_chat_id or telegram_context.get("chat_id")
+
+        job_id = str(job_data.get("job_id", ""))
+
+        # The job data has no status message ID. The first send in the /dump
+        # handler can fail. A job retry or a crash recovery can also drop the
+        # ID. Look for a status message that the worker made before. Use it
+        # again. This stops the worker from making a second message.
+        if not initial_message_id:
+            ref = await self.get_status_message_ref(job_id)
+            if ref:
+                initial_chat_id, initial_message_id = ref
+                target_chat_id = initial_chat_id
+                job_data["initial_message_id"] = initial_message_id
+                job_data["initial_chat_id"] = initial_chat_id
+                metadata = job_data.setdefault("metadata", {})
+                metadata.setdefault("telegram_context", {})["message_id"] = initial_message_id
+
+        if not target_chat_id:
             return  # privdump or missing context; allow job to proceed
 
         # Prefer the latest rendered status text so retries do not rewind the
         # Telegram message back to its original queued state.
-        job_id = str(job_data.get("job_id", ""))
         probe_text = await self.get_latest_status_text(job_id)
         if not probe_text:
             probe_text = job_data.get("_queued_text", f"\u23f3 Job `{job_id}` starting...")
+
+        # The job still has no status message. The first send in the /dump
+        # handler failed. Make a new status message now. Store its location so a
+        # later retry or recovery edits the same message. Backfill the ID into
+        # the job data so this run can edit it too. This keeps the user informed
+        # even after the first send fails.
+        if not initial_message_id:
+            try:
+                # Use a time limit. A slow proxy must not hold the worker.
+                new_message = await self._call_telegram(
+                    bot.send_message(
+                        chat_id=target_chat_id,
+                        text=probe_text,
+                        parse_mode=settings.DEFAULT_PARSE_MODE,
+                        disable_web_page_preview=True,
+                    ),
+                    settings.TELEGRAM_TEXT_REQUEST_TIMEOUT,
+                )
+            except Forbidden as e:
+                raise RuntimeError(f"Telegram context invalid (bot blocked/forbidden): {e}") from e
+            except BadRequest as e:
+                msg = str(e).lower()
+                if "chat not found" in msg or "chat_id is empty" in msg or "bots can't send messages to bots" in msg:
+                    raise RuntimeError(f"Telegram context invalid (chat gone): {e}") from e
+                # A parse error is not evidence the chat is unreachable. Let the
+                # job run with no status message.
+                console.print(
+                    f"[yellow]Could not create a status message for job {job_id}: {e}[/yellow]"
+                )
+                return
+            except TelegramError as e:
+                # A transient error (for example a timeout). Let the job run
+                # with no status message.
+                console.print(
+                    f"[yellow]Could not create a status message for job {job_id}: {e}[/yellow]"
+                )
+                return
+            job_data["initial_message_id"] = new_message.message_id
+            job_data["initial_chat_id"] = target_chat_id
+            metadata = job_data.setdefault("metadata", {})
+            metadata.setdefault("telegram_context", {})["message_id"] = new_message.message_id
+            await self.store_status_message_ref(job_id, target_chat_id, new_message.message_id)
+            console.print(
+                f"[green]Created status message {new_message.message_id} for job {job_id}[/green]"
+            )
+            return
 
         try:
             # Use a time limit here too. This code runs in the worker before
@@ -1185,7 +1311,7 @@ class MessageQueue:
             # the TelegramError block below, thus the job continues.
             await self._call_telegram(
                 bot.edit_message_text(
-                    chat_id=initial_chat_id,
+                    chat_id=target_chat_id,
                     message_id=initial_message_id,
                     text=probe_text,
                     parse_mode=settings.DEFAULT_PARSE_MODE,
