@@ -1,15 +1,51 @@
 import os
 import shutil
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from rich.console import Console
 
+from dumpyarabot.file_utils import (
+    find_files_by_pattern,
+    move_file_to_root,
+    safe_remove_file,
+)
+from dumpyarabot.process_utils import (
+    HALF_HOUR,
+    ONE_HOUR,
+    ProcessException,
+    run_analysis_command,
+    run_command,
+    run_extraction_command,
+    run_git_command,
+)
 from dumpyarabot.schemas import DumpJob
-from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_command, run_extraction_command, run_git_command, run_analysis_command
-from dumpyarabot.file_utils import find_files_by_pattern, move_file_to_root, safe_remove_file
 
 console = Console()
+
+_OTADUMP_PAYLOAD_MARKER = "Extracting payload.bin with otadump"
+_MISSING_SYSTEM_MARKER = "System folder doesn't exist"
+
+
+def _path_without_executable(path: str, executable: str) -> str:
+    """Remove the PATH entry containing an executable."""
+    executable_path = shutil.which(executable, path=path)
+    if executable_path is None:
+        return path
+
+    executable_dir = Path(executable_path).resolve().parent
+    return os.pathsep.join(
+        entry
+        for entry in path.split(os.pathsep)
+        if Path(entry or os.curdir).resolve() != executable_dir
+    )
+
+
+def _is_broken_otadump_payload_failure(error: ProcessException) -> bool:
+    """Identify otadump's silent-success failure on an extracted payload.bin."""
+    output = str(error)
+    if error.result is not None:
+        output += f"\n{error.result.stdout}\n{error.result.stderr}"
+    return _OTADUMP_PAYLOAD_MARKER in output and _MISSING_SYSTEM_MARKER in output
 
 
 class FirmwareExtractor:
@@ -41,15 +77,42 @@ class FirmwareExtractor:
 
     async def _extract_with_python_dumper(self, firmware_path: str) -> str:
         """Extract using the modern Python dumpyara tool."""
-        result = await run_command(
+        command = (
             "uvx", "--from",
             "git+https://github.com/deadman96385/dumpyara@0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8",
             "dumpyara", firmware_path, "-o", str(self.work_dir),
-            cwd=self.work_dir,
-            timeout=ONE_HOUR,
-            check=True,
-            description="Python dumper extraction"
         )
+        try:
+            await run_command(
+                *command,
+                cwd=self.work_dir,
+                timeout=ONE_HOUR,
+                check=True,
+                description="Python dumper extraction",
+            )
+        except ProcessException as error:
+            if not _is_broken_otadump_payload_failure(error):
+                raise
+
+            current_path = os.environ.get("PATH", os.defpath)
+            fallback_path = _path_without_executable(current_path, "otadump")
+            if fallback_path == current_path:
+                raise
+
+            console.print(
+                "[yellow]otadump failed to extract payload.bin; "
+                "retrying with Dumpyara's vendored payload parser[/yellow]"
+            )
+            uvx = shutil.which("uvx", path=current_path) or "uvx"
+            await run_command(
+                uvx,
+                *command[1:],
+                cwd=self.work_dir,
+                timeout=ONE_HOUR,
+                check=True,
+                env={"PATH": fallback_path},
+                description="Python dumper extraction fallback",
+            )
 
         return str(self.work_dir)
 
