@@ -564,9 +564,17 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Step 6: Starting firmware extraction (52%)
                 await update_progress_with_metadata(job_data, " Extracting firmware partitions...", 52.0)
 
+                # Surface a dumper switch (see FirmwareExtractor._extract_with_fallback)
+                # instead of leaving the status message on "Extracting firmware
+                # partitions..." for however long the second attempt takes.
+                async def _on_extract_status(message: str) -> None:
+                    await update_progress_with_metadata(job_data, f" {message}", 54.0)
+
                 # Use periodic timer for extraction operation
                 async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 52.0}):
-                    await extractor.extract_firmware(dump_job, firmware_path)
+                    await extractor.extract_firmware(
+                        dump_job, firmware_path, on_status=_on_extract_status
+                    )
 
                 # Step 7: Firmware extraction completed (56%)
                 await update_progress_with_metadata(job_data, " Firmware extraction completed", 56.0)

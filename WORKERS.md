@@ -38,7 +38,8 @@ User Command → Validation → Job Queue → Worker → Processing → Completi
 
 ###  **Full Feature Parity**
 - **Download optimization** with Xiaomi mirrors, special URL handling
-- **Dual extraction** methods (Python dumpyara + alternative dumper)
+- **Dual extraction** methods (Python dumpyara + alternative dumper), with an
+  automatic retry on the alternative dumper when the Python one fails
 - **Comprehensive property extraction** with extensive fallback logic
 - **Boot image processing** with device tree extraction
 - **GitLab integration** with repository/subgroup creation
@@ -259,7 +260,10 @@ Jobs automatically retry on failure with exponential backoff:
 ### Common Error Scenarios
 
 1. **Download failures**: Mirror optimization and tool fallbacks
-2. **Extraction failures**: Dual extraction method support
+2. **Extraction failures**: Dual extraction method support. A dumper that exits 0
+   without writing any partition (payload.bin extraction can fail silently) is
+   treated as a failure and retried on the other dumper, which uses a different
+   `otadump` binary. Timeouts are not retried - the job budget is 2h.
 3. **GitLab failures**: Detailed API error reporting
 4. **Worker crashes**: Job requeue for other workers
 5. **Network issues**: Configurable timeouts and retries

@@ -1,15 +1,113 @@
 import os
+import re
 import shutil
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Awaitable, Callable, List, Optional, Tuple
 
 from rich.console import Console
 
 from dumpyarabot.schemas import DumpJob
-from dumpyarabot.process_utils import HALF_HOUR, ONE_HOUR, run_command, run_extraction_command, run_git_command, run_analysis_command
-from dumpyarabot.file_utils import find_files_by_pattern, move_file_to_root, safe_remove_file
+from dumpyarabot.process_utils import (
+    HALF_HOUR,
+    ONE_HOUR,
+    ProcessException,
+    run_analysis_command,
+    run_command,
+    run_extraction_command,
+    run_git_command,
+)
+from dumpyarabot.file_utils import (
+    find_files_by_pattern,
+    move_file_to_root,
+    safe_remove_directory,
+    safe_remove_file,
+)
 
 console = Console()
+
+# Partition names both dumpers can produce. Also used to tell a successful
+# extraction from one that quietly wrote nothing.
+PARTITIONS = [
+    "system", "systemex", "system_ext", "system_other",
+    "vendor", "cust", "odm", "odm_ext", "oem", "factory", "product", "modem",
+    "xrom", "oppo_product", "opproduct", "reserve", "india", "my_preload",
+    "my_odm", "my_stock", "my_operator", "my_country", "my_product", "my_company",
+    "my_engineering", "my_heytap", "my_custom", "my_manifest", "my_carrier", "my_region",
+    "my_bigball", "my_version", "special_preload", "vendor_dlkm", "odm_dlkm", "system_dlkm",
+    "mi_ext", "radio", "product_h", "preas", "preavs", "preload", "mi_product"
+]
+
+# dumpyara's scratch directories, created inside the output directory. It cleans
+# them up itself, but a hard kill (OOM, timeout) can leave multi-GB leftovers
+# behind that would otherwise be retried into, or committed to, the dump repo.
+DUMPYARA_TEMP_DIRS = ("temp_extracted_archive", "temp_raw_images")
+
+# dumpyara's own sanity check, which is what surfaces when the partitions never
+# made it out of the firmware. It says nothing about *why*, so it gets
+# translated into something a human can act on.
+_NO_SYSTEM_FOLDER = re.compile(r"System folder (?:doesn't exist|is empty)")
+_OTADUMP_PAYLOAD = re.compile(r"Extracting payload\.bin with otadump")
+
+# Awaited with a short human-readable line whenever the extractor changes course,
+# so a long-running job can say so on Telegram instead of going quiet.
+StatusCallback = Callable[[str], Awaitable[None]]
+
+
+class FirmwareExtractionError(Exception):
+    """Raised when the available dumpers could not extract the firmware.
+
+    `retryable` says whether trying the other dumper is worth it. A dumper that
+    ran out of time is not: the job's own budget is two hours, so a second
+    hour-long attempt only trades one failure for a later one.
+    """
+
+    def __init__(self, message: str, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+def failed_command_output(error: Exception) -> str:
+    """Return the output a failed command produced, falling back to its message."""
+    result = getattr(error, "result", None)
+    if result is None:
+        return str(error)
+
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    return output or str(error)
+
+
+def summarize_dumper_failure(output: str) -> str:
+    """Condense a dumper's output into one actionable line.
+
+    Dumper failures reach Telegram as the exception message, and a raw dumpyara
+    traceback is both unreadable and misleading: its last line describes the
+    missing `system` folder, not the extraction step that actually failed.
+    """
+    text = output or ""
+
+    if _NO_SYSTEM_FOLDER.search(text):
+        if _OTADUMP_PAYLOAD.search(text):
+            # otadump decides a file is a zip by hunting for an end-of-central-
+            # directory signature, and a multi-GB payload.bin has a real chance
+            # of containing those four bytes by luck - a Pixel cheetah payload
+            # carried one 1.44GB in. It then looks for a `payload.bin` *member*
+            # inside its own payload.bin, finds none, and gives up. Nothing about
+            # that reaches us: the error goes to an indicatif progress bar, which
+            # draws nothing without a terminal, and main() discards the result
+            # and returns Ok, so a failed run and a successful one are identical
+            # from outside - exit code 0, no output.
+            return (
+                "payload.bin yielded no partitions - otadump exited successfully "
+                "without extracting anything (it returns 0 even when extraction "
+                "fails, and prints nothing when not attached to a terminal)"
+            )
+        return "the dumper finished without extracting a system partition"
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines:
+        return lines[-1]
+
+    return "the dumper failed without producing any output"
 
 
 class FirmwareExtractor:
@@ -19,14 +117,19 @@ class FirmwareExtractor:
         self.work_dir = Path(work_dir)
         self.firmware_extractor_path = Path.home() / "Firmware_extractor"
 
-    async def extract_firmware(self, job: DumpJob, firmware_path: str) -> str:
+    async def extract_firmware(
+        self,
+        job: DumpJob,
+        firmware_path: str,
+        on_status: Optional[StatusCallback] = None,
+    ) -> str:
         """Extract firmware and return extraction directory."""
         console.print(f"[blue]Extracting firmware: {firmware_path}[/blue]")
 
         if job.dump_args.use_alt_dumper:
             extraction_dir = await self._extract_with_alternative_dumper(firmware_path)
         else:
-            extraction_dir = await self._extract_with_python_dumper(firmware_path)
+            extraction_dir = await self._extract_with_fallback(firmware_path, on_status)
 
         # Delete the original firmware archive so it isn't committed/pushed with
         # the extracted contents. Mirrors `rm -f "$FILE"` from the legacy
@@ -39,19 +142,105 @@ class FirmwareExtractor:
 
         return extraction_dir
 
+    async def _extract_with_fallback(
+        self,
+        firmware_path: str,
+        on_status: Optional[StatusCallback] = None,
+    ) -> str:
+        """Run the Python dumper, falling back to the alternative dumper.
+
+        The two do not extract payloads the same way. dumpyara unpacks the
+        archive first and hands otadump the extracted `payload.bin`, while
+        Firmware_extractor passes it the original zip. That difference decides
+        whether a payload extracts at all (see summarize_dumper_failure), so a
+        second attempt is a genuinely different attempt, not a retry.
+        """
+        try:
+            return await self._extract_with_python_dumper(firmware_path)
+        except FirmwareExtractionError as python_dumper_error:
+            if not python_dumper_error.retryable:
+                raise
+
+            console.print(f"[yellow]Python dumper failed: {python_dumper_error}[/yellow]")
+            console.print("[yellow]Retrying with the alternative dumper...[/yellow]")
+
+            if on_status:
+                await on_status(
+                    "Python dumper failed, retrying with the alternative dumper..."
+                )
+
+            self._clean_dumper_leftovers()
+
+            try:
+                return await self._extract_with_alternative_dumper(firmware_path)
+            except Exception as alt_dumper_error:
+                raise FirmwareExtractionError(
+                    f"Both dumpers failed. Python dumper: {python_dumper_error}. "
+                    f"Alternative dumper: {alt_dumper_error}"
+                ) from alt_dumper_error
+
     async def _extract_with_python_dumper(self, firmware_path: str) -> str:
         """Extract using the modern Python dumpyara tool."""
-        result = await run_command(
-            "uvx", "--from",
-            "git+https://github.com/deadman96385/dumpyara@0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8",
-            "dumpyara", firmware_path, "-o", str(self.work_dir),
-            cwd=self.work_dir,
-            timeout=ONE_HOUR,
-            check=True,
-            description="Python dumper extraction"
-        )
+        try:
+            await run_command(
+                "uvx", "--from",
+                "git+https://github.com/deadman96385/dumpyara@0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8",
+                "dumpyara", firmware_path, "-o", str(self.work_dir),
+                cwd=self.work_dir,
+                timeout=ONE_HOUR,
+                check=True,
+                description="Python dumper extraction"
+            )
+        except ProcessException as e:
+            result = getattr(e, "result", None)
+            if result is not None and result.timeout_occurred:
+                raise FirmwareExtractionError(str(e), retryable=False) from e
+
+            raise FirmwareExtractionError(
+                summarize_dumper_failure(failed_command_output(e))
+            ) from e
+
+        self._assert_partitions_extracted("Python dumper")
 
         return str(self.work_dir)
+
+    def _extracted_partitions(self) -> List[str]:
+        """Return the partitions that were extracted into the work directory."""
+        found = []
+
+        for partition in PARTITIONS:
+            partition_dir = self.work_dir / partition
+            if partition_dir.is_dir() and any(partition_dir.iterdir()):
+                found.append(partition)
+
+        return found
+
+    def _assert_partitions_extracted(self, dumper: str) -> None:
+        """Fail loudly when a dumper reports success but extracted nothing.
+
+        A dumper that exits 0 without writing partitions is worse than one that
+        crashes: the job carries on and only falls over much later, while
+        building the device tree or pushing an empty repository.
+        """
+        partitions = self._extracted_partitions()
+        if partitions:
+            console.print(
+                f"[green]{dumper} extracted {len(partitions)} partition(s): "
+                f"{', '.join(partitions)}[/green]"
+            )
+            return
+
+        raise FirmwareExtractionError(
+            f"{dumper} reported success but extracted no partitions"
+        )
+
+    def _clean_dumper_leftovers(self) -> None:
+        """Drop a failed run's scratch directories before retrying."""
+        for temp_dir in DUMPYARA_TEMP_DIRS:
+            leftover = self.work_dir / temp_dir
+            if leftover.exists():
+                console.print(f"[blue]Removing leftover {temp_dir}...[/blue]")
+                safe_remove_directory(leftover)
 
     async def _extract_with_alternative_dumper(self, firmware_path: str) -> str:
         """Extract using the alternative Firmware_extractor toolkit."""
@@ -62,16 +251,23 @@ class FirmwareExtractor:
 
         # Run the extractor script
         extractor_script = self.firmware_extractor_path / "extractor.sh"
-        result = await run_command(
-            "bash", str(extractor_script), firmware_path, str(self.work_dir),
-            cwd=self.work_dir,
-            timeout=ONE_HOUR,
-            check=True,
-            description="Alternative dumper extraction"
-        )
+        try:
+            await run_command(
+                "bash", str(extractor_script), firmware_path, str(self.work_dir),
+                cwd=self.work_dir,
+                timeout=ONE_HOUR,
+                check=True,
+                description="Alternative dumper extraction"
+            )
+        except ProcessException as e:
+            raise FirmwareExtractionError(
+                summarize_dumper_failure(failed_command_output(e))
+            ) from e
 
         # Extract individual partitions
         await self._extract_partitions()
+
+        self._assert_partitions_extracted("Alternative dumper")
 
         console.print("[green]Alternative dumper extraction completed[/green]")
         return str(self.work_dir)
@@ -96,15 +292,7 @@ class FirmwareExtractor:
 
     async def _extract_partitions(self):
         """Extract individual partition images using alternative dumper tools."""
-        partitions = [
-            "system", "systemex", "system_ext", "system_other",
-            "vendor", "cust", "odm", "odm_ext", "oem", "factory", "product", "modem",
-            "xrom", "oppo_product", "opproduct", "reserve", "india", "my_preload",
-            "my_odm", "my_stock", "my_operator", "my_country", "my_product", "my_company",
-            "my_engineering", "my_heytap", "my_custom", "my_manifest", "my_carrier", "my_region",
-            "my_bigball", "my_version", "special_preload", "vendor_dlkm", "odm_dlkm", "system_dlkm",
-            "mi_ext", "radio", "product_h", "preas", "preavs", "preload", "mi_product"
-        ]
+        partitions = PARTITIONS
 
         fsck_erofs = self.firmware_extractor_path / "tools" / "fsck.erofs"
         ext2rd = self.firmware_extractor_path / "tools" / "ext2rd"

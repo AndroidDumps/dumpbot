@@ -236,6 +236,13 @@ async def run_command(
             console.print(f"[yellow]{log_desc} cancelled[/yellow]")
         raise
 
+    except ProcessException:
+        # The `check` branch above raises from inside this try block. Letting the
+        # generic handler below catch it would re-wrap it, dropping the captured
+        # ProcessResult (so callers can no longer read the tool's output) and
+        # doubling the message into "Command failed: uvx - Command failed: uvx ...".
+        raise
+
     except Exception as e:
         if not quiet:
             console.print(f"[red]{log_desc} failed with exception: {e}[/red]")
