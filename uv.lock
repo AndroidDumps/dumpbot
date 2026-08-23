@@ -656,7 +656,7 @@ toml = [
 [[package]]
 name = "dumpyara"
 version = "1.1.0"
-source = { git = "https://github.com/deadman96385/dumpyara?rev=0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8#0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8" }
+source = { git = "https://github.com/AndroidDumps/pydumpyara?rev=f6011365c1aaec934e3aaec23d9855d11953bca6#f6011365c1aaec934e3aaec23d9855d11953bca6" }
 dependencies = [
     { name = "brotli" },
     { name = "liblp" },
@@ -705,7 +705,7 @@ dev = [
 requires-dist = [
     { name = "aria2p", specifier = ">=0.12.0,<1.0.0" },
     { name = "arq", specifier = ">=0.27.0,<1.0.0" },
-    { name = "dumpyara", git = "https://github.com/deadman96385/dumpyara?rev=0f2218f0c33c1d62c2e54a2f2b2f692221bab8b8" },
+    { name = "dumpyara", git = "https://github.com/AndroidDumps/pydumpyara?rev=f6011365c1aaec934e3aaec23d9855d11953bca6" },
     { name = "httpx", specifier = ">=0.28.1,<1.0.0" },
     { name = "pillow", specifier = ">=12.1.1,<13.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
