@@ -332,23 +332,25 @@ async def format_comprehensive_progress_message(
             message += f" (Android {escape_markdown(str(android_version))})"
         message += "\n"
 
-    # Enhanced completion information
-    if progress and progress.get("percentage", 0) >= 100 and metadata:
-        if metadata.get("repository"):
-            repo = metadata["repository"]
-            # Bare URL (not backticked), so escape it — branch paths contain
-            # underscores (e.g. .../tree/lagos_g-user-...) that would otherwise
-            # open an italic entity Telegram can't close.
-            message += f"\n *Repository:* {escape_markdown(repo['url'])}\n"
+    if metadata and metadata.get("repository"):
+        repo = metadata["repository"]
+        # Bare URL (not backticked), so escape it — branch paths contain
+        # underscores (e.g. .../tree/lagos_g-user-...) that would otherwise
+        # open an italic entity Telegram can't close.
+        message += f"\n *Repository:* {escape_markdown(repo['url'])}\n"
 
-            # Add device fingerprint for completed dumps
-            if metadata.get("device_info"):
-                device = metadata["device_info"]
-                if device.get("fingerprint"):
-                    fingerprint = device["fingerprint"]
-                    if len(fingerprint) > 50:
-                        fingerprint = fingerprint[:47] + "..."
-                    message += f" *Fingerprint:* `{fingerprint}`\n"
+        # Add device fingerprint for completed dumps
+        if (
+            progress
+            and progress.get("percentage", 0) >= 100
+            and metadata.get("device_info")
+        ):
+            device = metadata["device_info"]
+            if device.get("fingerprint"):
+                fingerprint = device["fingerprint"]
+                if len(fingerprint) > 50:
+                    fingerprint = fingerprint[:47] + "..."
+                message += f" *Fingerprint:* `{fingerprint}`\n"
 
     # Keep failure edits concise; detailed errors are sent as an attached log file.
     if progress and progress.get("error_message") and metadata and metadata.get("error_context"):
@@ -653,5 +655,3 @@ def format_time_ago(timestamp) -> str:
         return f"{seconds // 3600}h ago"
     else:
         return f"{seconds // 86400}d ago"
-
-
