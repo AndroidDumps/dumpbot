@@ -21,6 +21,7 @@ from dumpyarabot.firmware_downloader import FirmwareDownloader
 from dumpyarabot.firmware_extractor import FirmwareExtractor
 from dumpyarabot.gitlab_manager import (
     GITLAB_BASE_URL,
+    BranchAlreadyExistsError,
     GitLabManager,
     gitlab_http_client,
 )
@@ -284,7 +285,11 @@ def _build_failure_log_text(job_data: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-async def _send_failure_notification(job_data: Dict[str, Any], error_details: str) -> None:
+async def _send_failure_notification(
+    job_data: Dict[str, Any],
+    error_details: str,
+    send_log: bool = True,
+) -> None:
     """Send a failure notification using existing message queue - PRESERVING ALL TELEGRAM FEATURES."""
 
     try:
@@ -368,21 +373,22 @@ async def _send_failure_notification(job_data: Dict[str, Any], error_details: st
 
         console.print(f"[green]Sent failure notification for job {job_data.get('job_id', 'unknown')}[/green]")
 
-        # Send failure log as a text file for debugging
-        try:
-            log_text = _build_failure_log_text(job_data)
-            log_bytes = log_text.encode("utf-8")
-            job_id_short = str(job_data.get("job_id", "unknown"))[:8]
-            filename = f"dump_failure_{job_id_short}.txt"
-            target_chat = primary_allowed_chat if is_moderated_request and primary_allowed_chat is not None else chat_id
-            await message_queue.send_document(
-                chat_id=target_chat,
-                content=log_bytes,
-                filename=filename,
-                caption="Failure log",
-            )
-        except Exception as log_err:
-            console.print(f"[yellow]Could not queue failure log file: {log_err}[/yellow]")
+        if send_log:
+            # Send failure log as a text file for debugging
+            try:
+                log_text = _build_failure_log_text(job_data)
+                log_bytes = log_text.encode("utf-8")
+                job_id_short = str(job_data.get("job_id", "unknown"))[:8]
+                filename = f"dump_failure_{job_id_short}.txt"
+                target_chat = primary_allowed_chat if is_moderated_request and primary_allowed_chat is not None else chat_id
+                await message_queue.send_document(
+                    chat_id=target_chat,
+                    content=log_bytes,
+                    filename=filename,
+                    caption="Failure log",
+                )
+            except Exception as log_err:
+                console.print(f"[yellow]Could not queue failure log file: {log_err}[/yellow]")
 
     except Exception as e:
         console.print(f"[red]Failed to send failure notification: {e}[/red]")
@@ -646,6 +652,37 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "metadata": job_data["metadata"]
                 }
 
+            except BranchAlreadyExistsError as e:
+                console.print(f"[yellow]Job {job_id}: {e}[/yellow]")
+                metadata = job_data.get("metadata") or {}
+                progress_history = metadata.get("progress_history") or []
+                failed_step = (
+                    progress_history[-1].get("message")
+                    if progress_history
+                    else None
+                )
+                job_data["metadata"].update({
+                    "status": "failed",
+                    "end_time": datetime.now(timezone.utc).isoformat(),
+                    "repository": {"url": e.repo_url, "path": e.repo_path},
+                    "error_context": {
+                        "message": str(e),
+                        "current_step": "GitLab branch already exists",
+                        "last_successful_step": _derive_last_successful_step(
+                            progress_history,
+                            failed_step,
+                        ),
+                        "failure_time": datetime.now(timezone.utc).isoformat(),
+                    },
+                })
+                await _send_failure_notification(job_data, str(e), send_log=False)
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "branch_already_exists",
+                    "repository_url": e.repo_url,
+                    "metadata": job_data["metadata"],
+                }
             except JobCancelledError as e:
                 job_data["metadata"].update({
                     "status": "cancelled",

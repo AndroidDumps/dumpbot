@@ -97,6 +97,9 @@ Options:
 - `a` use the alternative dumper
 - `f` force a new dump even if one exists
 
+If the target branch already exists, the job stops and the Telegram message includes a link to the existing dump.
+Use `f` to force a new dump.
+
 Examples:
 - `/dump https://example.com/firmware.zip`
 - `/dump https://example.com/firmware.zip a`

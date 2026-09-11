@@ -230,7 +230,7 @@ ENABLE_DEVICE_TREE_GEN=true
 
 # Options:
 # a - Use alternative dumper
-# f - Force (skip existing build check)
+# f - Force a new dump even if one exists
 # p - Private dump (delete original message)
 ```
 
@@ -263,6 +263,8 @@ Jobs automatically retry on failure with exponential backoff:
 3. **GitLab failures**: Detailed API error reporting
 4. **Worker crashes**: Job requeue for other workers
 5. **Network issues**: Configurable timeouts and retries
+6. **Existing branch**: The job stops and the Telegram message includes a link to the existing dump.
+   Use `f` to force a new dump.
 
 ### Failure Analysis
 

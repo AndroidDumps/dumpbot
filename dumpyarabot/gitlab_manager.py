@@ -16,6 +16,16 @@ GITLAB_SERVER = "dumps.tadiphone.dev"
 GITLAB_BASE_URL = f"https://{GITLAB_SERVER}"
 
 
+class BranchAlreadyExistsError(Exception):
+    """Raised when a non-forced dump targets an existing branch."""
+
+    def __init__(self, branch: str, repo_url: str, repo_path: str):
+        self.branch = branch
+        self.repo_url = repo_url
+        self.repo_path = repo_path
+        super().__init__(f"Branch '{branch}' already exists in {repo_url}")
+
+
 def gitlab_http_client() -> httpx.AsyncClient:
     """Create an HTTP client that uses the GitLab TLS setting."""
     return httpx.AsyncClient(verify=settings.GITLAB_VERIFY_SSL)
@@ -55,7 +65,8 @@ class GitLabManager:
         if await self._branch_exists(project_id, branch, dumper_token):
             if not force:
                 repo_url = f"https://{self.gitlab_server}/{self.org}/{repo_subgroup}/{repo_name}/tree/{branch}/"
-                raise Exception(f"Branch '{branch}' already exists in {repo_url}")
+                repo_path = f"{self.org}/{repo_subgroup}/{repo_name}"
+                raise BranchAlreadyExistsError(branch, repo_url, repo_path)
             console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
 
         # Setup git repository
