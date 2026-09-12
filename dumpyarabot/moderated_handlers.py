@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from rich.console import Console
 from telegram import Chat, Message, ReplyParameters, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from dumpyarabot import schemas, url_utils, utils
@@ -20,7 +21,12 @@ from dumpyarabot.config import (
 )
 from dumpyarabot.message_formatting import format_firmware_inputs, generate_progress_bar
 from dumpyarabot.message_queue import message_queue
-from dumpyarabot.privacy import redact_for_job, redact_urls, sanitize_url
+from dumpyarabot.privacy import (
+    PRIVATE_URL_PLACEHOLDER,
+    redact_for_job,
+    redact_urls,
+    sanitize_url,
+)
 from dumpyarabot.storage import ReviewStorage
 from dumpyarabot.ui import (
     ACCEPTANCE_TEMPLATE,
@@ -60,6 +66,179 @@ async def _cleanup_request(context: ContextTypes.DEFAULT_TYPE, request_id: str) 
     await ReviewStorage.remove_options_state(context, request_id)
 
 
+def _pending_urls(pending_review: schemas.PendingReview) -> list[str]:
+    return [pending_review.url, *pending_review.delta_urls]
+
+
+def _moderation_url_summary(urls: list[str], *, private: bool) -> str:
+    if private:
+        return PRIVATE_URL_PLACEHOLDER
+    return "\n".join(
+        f"{index}. {escape_markdown(sanitize_url(url))}"
+        for index, url in enumerate(urls, start=1)
+    )
+
+
+def _options_message_text(
+    request_id: str,
+    pending_review: schemas.PendingReview,
+    *,
+    private: bool,
+) -> str:
+    base_url = PRIVATE_URL_PLACEHOLDER if private else sanitize_url(pending_review.url)
+    return (
+        f" Configure options for request {request_id}\n"
+        f"URL: {base_url}\n"
+        f"Delta OTAs: {len(pending_review.delta_urls)}"
+    )
+
+
+async def _edit_message_text_if_changed(bot: Any, **kwargs: Any) -> None:
+    try:
+        await bot.edit_message_text(**kwargs)
+    except BadRequest as error:
+        if "message is not modified" not in str(error).lower():
+            raise
+
+
+async def _delete_message_if_present(bot: Any, **kwargs: Any) -> None:
+    try:
+        await bot.delete_message(**kwargs)
+    except BadRequest as error:
+        error_lower = str(error).lower()
+        if (
+            "message to delete not found" not in error_lower
+            and "message can't be deleted" not in error_lower
+        ):
+            raise
+
+
+async def _sync_bot_owned_request_summaries(
+    context: ContextTypes.DEFAULT_TYPE,
+    request_id: str,
+    pending_review: schemas.PendingReview,
+    options_state: schemas.AcceptOptionsState,
+) -> None:
+    """Apply the selected privacy state to both bot-owned request summaries."""
+    await _edit_message_text_if_changed(
+        bot=context.bot,
+        chat_id=pending_review.review_chat_id,
+        message_id=pending_review.review_message_id,
+        text=_options_message_text(
+            request_id,
+            pending_review,
+            private=options_state.privdump,
+        ),
+        reply_markup=create_options_keyboard(request_id, options_state),
+        disable_web_page_preview=True,
+    )
+
+    if pending_review.submission_confirmation_message_id is not None:
+        summary = _moderation_url_summary(
+            _pending_urls(pending_review),
+            private=options_state.privdump,
+        )
+        try:
+            await _edit_message_text_if_changed(
+                bot=context.bot,
+                chat_id=pending_review.original_chat_id,
+                message_id=pending_review.submission_confirmation_message_id,
+                text=SUBMISSION_TEMPLATE.format(url=summary),
+                parse_mode=settings.DEFAULT_PARSE_MODE,
+                disable_web_page_preview=True,
+            )
+        except BadRequest as error:
+            if "message to edit not found" in str(error).lower():
+                pending_review.submission_confirmation_message_id = None
+                await ReviewStorage.update_pending_review(context, pending_review)
+            else:
+                raise
+
+    if options_state.privdump:
+        await _detach_private_submission_confirmation(context, pending_review)
+
+
+async def _detach_private_submission_confirmation(
+    context: ContextTypes.DEFAULT_TYPE,
+    pending_review: schemas.PendingReview,
+) -> None:
+    """Replace a reply confirmation so Telegram cannot quote the source message."""
+    stale_message_id = pending_review.stale_submission_confirmation_message_id
+    if stale_message_id is not None:
+        await _delete_message_if_present(
+            context.bot,
+            chat_id=pending_review.original_chat_id,
+            message_id=stale_message_id,
+        )
+        pending_review.stale_submission_confirmation_message_id = None
+        await ReviewStorage.update_pending_review(context, pending_review)
+
+    message_id = pending_review.submission_confirmation_message_id
+    if message_id is None or not pending_review.submission_replies_to_request:
+        return
+
+    replacement = await context.bot.send_message(
+        chat_id=pending_review.original_chat_id,
+        text=SUBMISSION_TEMPLATE.format(url=PRIVATE_URL_PLACEHOLDER),
+        parse_mode=settings.DEFAULT_PARSE_MODE,
+        disable_web_page_preview=True,
+    )
+    pending_review.submission_confirmation_message_id = replacement.message_id
+    pending_review.submission_replies_to_request = False
+    pending_review.stale_submission_confirmation_message_id = message_id
+    await ReviewStorage.update_pending_review(context, pending_review)
+    await _delete_message_if_present(
+        context.bot,
+        chat_id=pending_review.original_chat_id,
+        message_id=message_id,
+    )
+    pending_review.stale_submission_confirmation_message_id = None
+    await ReviewStorage.update_pending_review(context, pending_review)
+
+
+async def _delete_original_private_request(
+    context: ContextTypes.DEFAULT_TYPE,
+    pending_review: schemas.PendingReview,
+) -> None:
+    """Best-effort removal of the requester's URL-bearing message."""
+    pending_review.original_message_private = True
+    try:
+        await ReviewStorage.update_pending_review(context, pending_review)
+    except Exception:
+        console.print("[yellow]Could not persist private request state[/yellow]")
+    await _delete_private_request_message(
+        context,
+        pending_review.original_chat_id,
+        pending_review.original_message_id,
+    )
+
+
+async def _delete_private_request_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+) -> None:
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        console.print("[yellow]Could not delete the original private request message[/yellow]")
+
+
+async def _prepare_private_acceptance(
+    context: ContextTypes.DEFAULT_TYPE,
+    request_id: str,
+    pending_review: schemas.PendingReview,
+    options_state: schemas.AcceptOptionsState,
+) -> None:
+    await _delete_original_private_request(context, pending_review)
+    await _sync_bot_owned_request_summaries(
+        context,
+        request_id,
+        pending_review,
+        options_state,
+    )
+
+
 async def _create_status_message(
     context: ContextTypes.DEFAULT_TYPE,
     pending_review: schemas.PendingReview,
@@ -71,7 +250,7 @@ async def _create_status_message(
     initial_text = _build_status_message_text(dump_args, job_id)
 
     reply_parameters = None
-    if not dump_args.use_privdump:
+    if not dump_args.use_privdump and not pending_review.original_message_private:
         reply_parameters = ReplyParameters(
             message_id=pending_review.original_message_id,
             chat_id=pending_review.original_chat_id,
@@ -116,7 +295,7 @@ def _build_status_message_text(dump_args: schemas.DumpArguments, job_id: str) ->
 async def handle_request_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle #request messages with URL parsing and validation."""
+    """Handle legacy #request messages with URL parsing and validation."""
     chat: Optional[Chat] = update.effective_chat
     message: Optional[Message] = update.effective_message
     user = update.effective_user
@@ -143,10 +322,73 @@ async def handle_request_message(
         console.print("[yellow]No valid #request pattern found[/yellow]")
         return
 
+    message_without_url = re.sub(r'https?://[^\s]+', '', raw_message).strip()
+    message_without_url = re.sub(r'#request\s*', '', message_without_url).strip()
+    original_message = _truncate_message(message_without_url) if message_without_url else "No additional text"
+    await _create_moderated_request(
+        update,
+        context,
+        url_strings,
+        schemas.AcceptOptionsState(),
+        original_message,
+    )
+
+
+async def handle_moderated_dump(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Create a moderated request from /dump arguments."""
+    chat = update.effective_chat
+    message = update.effective_message
+    if not chat or not message:
+        return
+
+    try:
+        url_strings, options = url_utils.parse_dump_tokens(list(context.args or []))
+    except ValueError as error:
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text=str(error),
+            reply_to_message_id=message.message_id,
+            context={"command": "dump", "error": "missing_urls"},
+        )
+        return
+
+    options_state = schemas.AcceptOptionsState(
+        alt="a" in options,
+        force="f" in options,
+        privdump="p" in options,
+    )
+    if options_state.privdump:
+        await _delete_private_request_message(context, chat.id, message.message_id)
+    await _create_moderated_request(
+        update,
+        context,
+        url_strings,
+        options_state,
+        "No additional text",
+    )
+
+
+async def _create_moderated_request(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url_strings: list[str],
+    options_state: schemas.AcceptOptionsState,
+    original_message: str,
+) -> None:
+    """Validate, display, and persist one moderated request."""
+    chat = update.effective_chat
+    message = update.effective_message
+    user = update.effective_user
+    if not chat or not message or not user:
+        return
+
     console.print(f"[blue]Processing request with {len(url_strings)} firmware URL(s)[/blue]")
 
     try:
-        # 3. Validate every URL without changing its order.
+        # Validate every URL without changing its order.
         validated_urls = []
         for url_str in url_strings:
             is_valid, validated_url, error_msg = await url_utils.validate_and_normalize_url(url_str)
@@ -154,18 +396,11 @@ async def handle_request_message(
                 raise ValueError(error_msg)
             validated_urls.append(validated_url)
 
-        # 4. Generate request_id
         request_id = utils.generate_request_id()
 
-        # 5. Send review message to REVIEW_CHAT_ID with Accept/Reject buttons
-        # Remove the URL from the original message since it's already displayed above
-        message_without_url = re.sub(r'https?://[^\s]+', '', raw_message).strip()
-        # Remove #request tag and extra whitespace
-        message_without_url = re.sub(r'#request\s*', '', message_without_url).strip()
-        original_message = _truncate_message(message_without_url) if message_without_url else "No additional text"
-        url_summary = "\n".join(
-            f"{index}. {escape_markdown(sanitize_url(url))}"
-            for index, url in enumerate(validated_urls, start=1)
+        url_summary = _moderation_url_summary(
+            validated_urls,
+            private=options_state.privdump,
         )
         review_text = REVIEW_TEMPLATE.format(
             username=escape_markdown(user.username or user.first_name or str(user.id)),
@@ -174,8 +409,6 @@ async def handle_request_message(
             original_message=escape_markdown(original_message),
         )
 
-        # Send review message directly to get real Telegram message ID
-        from telegram import InlineKeyboardMarkup
         review_keyboard = create_review_keyboard(request_id)
         review_message = await message_queue.send_immediate_message(
             chat_id=settings.REVIEW_CHAT_ID,
@@ -184,23 +417,22 @@ async def handle_request_message(
             reply_to_message_id=None,
             disable_web_page_preview=True,
         )
-        # Attach the keyboard by editing (send_immediate_message doesn't support keyboards)
         await context.bot.edit_message_reply_markup(
             chat_id=settings.REVIEW_CHAT_ID,
             message_id=review_message.message_id,
             reply_markup=review_keyboard,
         )
 
-        # 6. Notify user of successful submission directly to get real Telegram message ID
         submission_message = await message_queue.send_immediate_message(
             chat_id=chat.id,
             text=SUBMISSION_TEMPLATE.format(url=url_summary),
             parse_mode=settings.DEFAULT_PARSE_MODE,
-            reply_to_message_id=message.message_id,
+            reply_to_message_id=(
+                None if options_state.privdump else message.message_id
+            ),
             disable_web_page_preview=True,
         )
 
-        # 7. Store PendingReview in bot_data (URL as string for Redis compatibility)
         pending_review = schemas.PendingReview(
             request_id=request_id,
             original_chat_id=chat.id,
@@ -212,9 +444,15 @@ async def handle_request_message(
             review_chat_id=settings.REVIEW_CHAT_ID,
             review_message_id=review_message.message_id,
             submission_confirmation_message_id=submission_message.message_id,
+            submission_replies_to_request=not options_state.privdump,
+            original_message_private=options_state.privdump,
         )
 
-        await ReviewStorage.store_pending_review(context, pending_review)
+        await ReviewStorage.store_pending_review_with_options(
+            context,
+            pending_review,
+            options_state,
+        )
 
         console.print(f"[green]Request {request_id} processed successfully[/green]")
 
@@ -225,9 +463,11 @@ async def handle_request_message(
             text=" Invalid URL format provided",
             context={"moderated_request": True, "error": "invalid_url"},
         )
-    except Exception as e:
-        console.print(f"[red]Error processing request: {e}[/red]")
-        console.print_exception()
+    except Exception as error:
+        safe_error = redact_urls(error, private=options_state.privdump)
+        console.print(f"[red]Error processing request: {safe_error}[/red]")
+        if not options_state.privdump:
+            console.print_exception()
         await message_queue.send_error(
             chat_id=chat.id,
             text=" An error occurred while processing your request",
@@ -293,10 +533,10 @@ async def _handle_accept_callback(
 
     # Update message to show options
     await query.edit_message_text(
-        text=(
-            f" Configure options for request {request_id}\n"
-            f"URL: {sanitize_url(pending_review.url)}\n"
-            f"Delta OTAs: {len(pending_review.delta_urls)}"
+        text=_options_message_text(
+            request_id,
+            pending_review,
+            private=options_state.privdump,
         ),
         reply_markup=create_options_keyboard(request_id, options_state),
         disable_web_page_preview=True,
@@ -345,12 +585,22 @@ async def _handle_toggle_callback(
     elif option == "privdump":
         options_state.privdump = not options_state.privdump
 
+    if option == "privdump" and options_state.privdump:
+        await _delete_original_private_request(context, pending_review)
+
     await ReviewStorage.update_options_state(context, request_id, options_state)
 
-    # Refresh keyboard with updated state
-    await query.edit_message_reply_markup(
-        reply_markup=create_options_keyboard(request_id, options_state)
-    )
+    try:
+        await _sync_bot_owned_request_summaries(
+            context,
+            request_id,
+            pending_review,
+            options_state,
+        )
+    except Exception:
+        console.print("[yellow]Could not update moderated request privacy[/yellow]")
+        await query.edit_message_text(" Could not update request options")
+        return
 
 
 async def _handle_submit_callback(
@@ -368,6 +618,14 @@ async def _handle_submit_callback(
     options_state = await ReviewStorage.get_options_state(context, request_id)
 
     try:
+        if options_state.privdump:
+            await _prepare_private_acceptance(
+                context,
+                request_id,
+                pending_review,
+                options_state,
+            )
+
         # Create DumpArguments with the selected options
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
@@ -375,7 +633,11 @@ async def _handle_submit_callback(
             use_alt_dumper=options_state.alt,
             force=options_state.force,
             use_privdump=options_state.privdump,
-            initial_message_id=None if options_state.privdump else pending_review.original_message_id,
+            initial_message_id=(
+                None
+                if options_state.privdump or pending_review.original_message_private
+                else pending_review.original_message_id
+            ),
             initial_chat_id=pending_review.original_chat_id,
         )
 
@@ -433,7 +695,7 @@ async def _handle_submit_callback(
                 text=user_message,
                 context=notification_context,
             )
-        else:
+        elif not pending_review.original_message_private:
             await message_queue.send_cross_chat(
                 chat_id=pending_review.original_chat_id,
                 text=user_message,
@@ -441,11 +703,20 @@ async def _handle_submit_callback(
                 reply_to_chat_id=pending_review.original_chat_id,
                 context=notification_context,
             )
+        else:
+            await message_queue.send_reply(
+                chat_id=pending_review.original_chat_id,
+                text=user_message,
+                context=notification_context,
+            )
 
         console.print("[green]Acceptance message sent successfully[/green]")
 
         # Delete the admin confirmation message after successful job start
-        await query.delete_message()
+        try:
+            await query.delete_message()
+        except Exception as e:
+            console.print(f"[yellow]Could not delete review message: {e}[/yellow]")
         await _cleanup_request(context, request_id)
 
     except Exception as e:
@@ -529,12 +800,27 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # Parse option flags
-    use_alt = "a" in options
-    force = "f" in options
-    use_privdump = "p" in options
+    # Add explicit moderator flags to the requester's persisted defaults.
+    options_state = await ReviewStorage.get_options_state(context, request_id)
+    if options:
+        options_state.alt = options_state.alt or "a" in options
+        options_state.force = options_state.force or "f" in options
+        options_state.privdump = options_state.privdump or "p" in options
+        await ReviewStorage.update_options_state(context, request_id, options_state)
+
+    use_alt = options_state.alt
+    force = options_state.force
+    use_privdump = options_state.privdump
 
     try:
+        if use_privdump:
+            await _prepare_private_acceptance(
+                context,
+                request_id,
+                pending_review,
+                options_state,
+            )
+
         # Start dump process with options
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
@@ -542,7 +828,11 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             use_alt_dumper=use_alt,
             force=force,
             use_privdump=use_privdump,
-            initial_message_id=None if use_privdump else pending_review.original_message_id,
+            initial_message_id=(
+                None
+                if use_privdump or pending_review.original_message_private
+                else pending_review.original_message_id
+            ),
             initial_chat_id=pending_review.original_chat_id,
         )
 
@@ -608,12 +898,18 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 text=user_message,
                 context=notification_context,
             )
-        else:
+        elif not pending_review.original_message_private:
             await message_queue.send_cross_chat(
                 chat_id=pending_review.original_chat_id,
                 text=user_message,
                 reply_to_message_id=pending_review.original_message_id,
                 reply_to_chat_id=pending_review.original_chat_id,
+                context=notification_context,
+            )
+        else:
+            await message_queue.send_reply(
+                chat_id=pending_review.original_chat_id,
+                text=user_message,
                 context=notification_context,
             )
 
@@ -703,6 +999,11 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
+    options_state = await ReviewStorage.get_options_state(context, request_id)
+    private_request = (
+        options_state.privdump or pending_review.original_message_private
+    )
+
     try:
         # Get admin info
         admin_user = update.effective_user
@@ -728,36 +1029,64 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             console.print(f"[yellow]Could not delete command message: {e}[/yellow]")
 
-        # Send cleaner final message in review chat with link to original request
-        await message_queue.send_cross_chat(
-            chat_id=chat.id,
-            text=f" Request {request_id} rejected by @{admin_name}\nReason: {reason}",
-            reply_to_message_id=pending_review.original_message_id,
-            reply_to_chat_id=pending_review.original_chat_id,
-            context={"command": "reject", "action": "rejection_confirmation", "request_id": request_id, "admin": admin_name}
-        )
+        rejection_confirmation = f" Request {request_id} rejected by @{admin_name}\nReason: {reason}"
+        rejection_context = {
+            "command": "reject",
+            "action": "rejection_confirmation",
+            "request_id": request_id,
+            "admin": admin_name,
+        }
+        if private_request:
+            await message_queue.send_reply(
+                chat_id=chat.id,
+                text=rejection_confirmation,
+                context=rejection_context,
+            )
+        else:
+            await message_queue.send_cross_chat(
+                chat_id=chat.id,
+                text=rejection_confirmation,
+                reply_to_message_id=pending_review.original_message_id,
+                reply_to_chat_id=pending_review.original_chat_id,
+                context=rejection_context,
+            )
 
         # Log rejection with reason
         console.print(f"[yellow]Request {request_id} rejected by @{admin_name}: {reason}[/yellow]")
 
         # Notify original requester with rejection message
-        await message_queue.send_cross_chat(
-            chat_id=pending_review.original_chat_id,
-            text=REJECTION_TEMPLATE.format(reason=reason),
-            reply_to_message_id=pending_review.original_message_id,
-            reply_to_chat_id=pending_review.original_chat_id,
-            context={"command": "reject", "action": "user_notification", "request_id": request_id}
-        )
+        user_rejection = REJECTION_TEMPLATE.format(reason=reason)
+        user_context = {
+            "command": "reject",
+            "action": "user_notification",
+            "request_id": request_id,
+        }
+        if private_request:
+            await message_queue.send_reply(
+                chat_id=pending_review.original_chat_id,
+                text=user_rejection,
+                context=user_context,
+            )
+        else:
+            await message_queue.send_cross_chat(
+                chat_id=pending_review.original_chat_id,
+                text=user_rejection,
+                reply_to_message_id=pending_review.original_message_id,
+                reply_to_chat_id=pending_review.original_chat_id,
+                context=user_context,
+            )
         await _cleanup_request(context, request_id)
 
     except Exception as e:
-        console.print(f"[red]Error processing rejection: {e}[/red]")
-        console.print_exception()
+        safe_error = redact_urls(e, private=private_request)
+        console.print(f"[red]Error processing rejection: {safe_error}[/red]")
+        if not private_request:
+            console.print_exception()
         # Don't try to reply to the message since it might be deleted
         await message_queue.send_error(
             chat_id=chat.id,
-            text=f" Error processing rejection for request {request_id}: {str(e)}",
-            context={"command": "reject", "error": "processing_exception", "request_id": request_id, "exception": str(e)}
+            text=f" Error processing rejection for request {request_id}: {safe_error}",
+            context={"command": "reject", "error": "rejection_exception", "request_id": request_id},
         )
 
 
@@ -779,10 +1108,15 @@ async def _handle_cancel_callback(
         return
 
     try:
+        user_display = (
+            f"@{pending.requester_username}"
+            if pending.requester_username
+            else f"User {pending.requester_id}"
+        )
         # Send cancellation message in review chat
         await message_queue.send_notification(
             chat_id=pending.review_chat_id,
-            text=f" Request {request_id} cancelled by user @{pending.requester_username}",
+            text=f" Request {request_id} cancelled by user {user_display}",
             context={"action": "request_cancelled", "request_id": request_id, "user": pending.requester_username}
         )
 
@@ -795,8 +1129,10 @@ async def _handle_cancel_callback(
         console.print(f"[yellow]Request {request_id} cancelled by user[/yellow]")
 
     except Exception as e:
-        console.print(f"[red]Error cancelling request: {e}[/red]")
-        console.print_exception()
+        safe_error = redact_urls(e, private=pending.original_message_private)
+        console.print(f"[red]Error cancelling request: {safe_error}[/red]")
+        if not pending.original_message_private:
+            console.print_exception()
         await query.edit_message_text(
             text=" Error cancelling request", reply_markup=None
         )

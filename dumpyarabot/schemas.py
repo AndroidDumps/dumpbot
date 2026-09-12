@@ -26,6 +26,9 @@ class PendingReview(BaseModel):
     review_chat_id: int
     review_message_id: int
     submission_confirmation_message_id: Optional[int] = None
+    submission_replies_to_request: bool = True
+    stale_submission_confirmation_message_id: Optional[int] = None
+    original_message_private: bool = False
 
 
 class AcceptOptionsState(BaseModel):

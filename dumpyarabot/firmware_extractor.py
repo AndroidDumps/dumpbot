@@ -171,12 +171,22 @@ def _raw_image_names_are_ready(names: Sequence[str]) -> bool:
     return any(stem in supported_partitions for stem in stems)
 
 
-def _is_raw_archive_ancillary(name: str) -> bool:
-    path = _safe_archive_member(name)
-    return path.suffix.lower() in {".md", ".sha256", ".txt"} or path.name.upper() in {
-        "README",
-        "SHA256SUMS",
-    }
+def _archive_member_needs_preparation(path: PurePosixPath) -> bool:
+    """Keep known Android partition containers on the legacy extraction path."""
+    name = path.name.lower()
+    return name == "payload.bin" or name.endswith(
+        (
+            ".new.dat",
+            ".new.dat.br",
+            ".patch.dat",
+            ".transfer.list",
+            ".img.br",
+            ".img.gz",
+            ".img.lz4",
+            ".img.xz",
+            ".img.zst",
+        )
+    )
 
 
 def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
@@ -280,7 +290,6 @@ class FirmwareExtractor:
     def __init__(self, work_dir: str):
         self.work_dir = Path(work_dir)
         self.firmware_extractor_path = Path.home() / "Firmware_extractor"
-        self._native_tasks: set[asyncio.Task[None]] = set()
 
     @staticmethod
     def is_raw_image_archive(firmware_path: str) -> bool:
@@ -288,69 +297,79 @@ class FirmwareExtractor:
         path = Path(firmware_path)
         if zipfile.is_zipfile(path):
             with zipfile.ZipFile(path) as archive:
-                regular_files = [info for info in archive.infolist() if not info.is_dir()]
-                if any(
-                    PurePosixPath(info.filename.replace("\\", "/")).name
-                    == "payload.bin"
-                    for info in regular_files
-                ):
-                    return False
-                image_files = [
-                    info
-                    for info in regular_files
-                    if _safe_archive_member(info.filename).suffix.lower() == ".img"
-                ]
-                if any(
-                    info not in image_files
-                    and not _is_raw_archive_ancillary(info.filename)
-                    for info in regular_files
-                ):
-                    return False
+                zip_image_files: list[zipfile.ZipInfo] = []
+                image_basenames: set[str] = set()
+                for info in archive.infolist():
+                    member_path = _safe_archive_member(info.filename)
+                    mode = info.external_attr >> 16
+                    file_type = stat.S_IFMT(mode)
+                    if stat.S_ISLNK(mode) or file_type not in {
+                        0,
+                        stat.S_IFREG,
+                        stat.S_IFDIR,
+                    }:
+                        return False
+                    if info.is_dir():
+                        continue
+                    if _archive_member_needs_preparation(member_path):
+                        return False
+                    if member_path.suffix.lower() == ".img":
+                        basename = member_path.name.casefold()
+                        if basename in image_basenames:
+                            return False
+                        image_basenames.add(basename)
+                        zip_image_files.append(info)
                 return _raw_image_names_are_ready(
-                    [info.filename for info in image_files]
+                    [info.filename for info in zip_image_files]
                 ) and all(
                     archive.open(info).read(4) != ANDROID_SPARSE_MAGIC
-                    for info in image_files
+                    for info in zip_image_files
                 )
         if tarfile.is_tarfile(path):
             with tarfile.open(path, mode="r:*") as archive:
-                regular_files = [
-                    member for member in archive.getmembers() if member.isfile()
-                ]
-                image_files = [
-                    member
-                    for member in regular_files
-                    if _safe_archive_member(member.name).suffix.lower() == ".img"
-                ]
-                if any(
-                    member not in image_files
-                    and not _is_raw_archive_ancillary(member.name)
-                    for member in regular_files
-                ):
-                    return False
+                tar_image_files: list[tarfile.TarInfo] = []
+                image_basenames = set()
+                for member in archive.getmembers():
+                    member_path = _safe_archive_member(member.name)
+                    if member.isdir():
+                        continue
+                    if not member.isreg():
+                        return False
+                    if _archive_member_needs_preparation(member_path):
+                        return False
+                    if member_path.suffix.lower() == ".img":
+                        basename = member_path.name.casefold()
+                        if basename in image_basenames:
+                            return False
+                        image_basenames.add(basename)
+                        tar_image_files.append(member)
                 if not _raw_image_names_are_ready(
-                    [member.name for member in image_files]
+                    [member.name for member in tar_image_files]
                 ):
                     return False
-                for member in image_files:
+                for member in tar_image_files:
                     extracted = archive.extractfile(member)
                     if extracted is None or extracted.read(4) == ANDROID_SPARSE_MAGIC:
                         return False
                 return True
         if path.name.lower().endswith(".7z"):
             with py7zr.SevenZipFile(path, mode="r") as archive:
-                regular_files = [info for info in archive.list() if info.is_file]
-                image_names = [
-                    info.filename
-                    for info in regular_files
-                    if _safe_archive_member(info.filename).suffix.lower() == ".img"
-                ]
-                if any(
-                    info.filename not in image_names
-                    and not _is_raw_archive_ancillary(info.filename)
-                    for info in regular_files
-                ):
-                    return False
+                image_names: list[str] = []
+                image_basenames = set()
+                for info in archive.list():
+                    member_path = _safe_archive_member(info.filename)
+                    if info.is_directory:
+                        continue
+                    if info.is_symlink or not info.is_file:
+                        return False
+                    if _archive_member_needs_preparation(member_path):
+                        return False
+                    if member_path.suffix.lower() == ".img":
+                        basename = member_path.name.casefold()
+                        if basename in image_basenames:
+                            return False
+                        image_basenames.add(basename)
+                        image_names.append(info.filename)
                 if not _raw_image_names_are_ready(image_names):
                     return False
                 magic_factory = _ImageMagicFactory()
@@ -398,7 +417,6 @@ class FirmwareExtractor:
         worker = asyncio.create_task(
             asyncio.to_thread(self.is_raw_image_archive, firmware_path)
         )
-        self._native_tasks.add(worker)
         try:
             while not worker.done():
                 if await _check_cancelled(cancellation_check):
@@ -416,8 +434,6 @@ class FirmwareExtractor:
             if not worker.done():
                 await self._drain_task(worker)
             raise
-        finally:
-            self._native_tasks.discard(worker)
 
     async def _run_otadump(
         self,
@@ -445,7 +461,6 @@ class FirmwareExtractor:
                 ) from error
 
         worker = asyncio.create_task(asyncio.to_thread(run))
-        self._native_tasks.add(worker)
         deadline = asyncio.get_running_loop().time() + timeout
         try:
             while not worker.done():
@@ -480,8 +495,6 @@ class FirmwareExtractor:
                 token.cancel()
                 await self._drain_task(worker)
             raise
-        finally:
-            self._native_tasks.discard(worker)
 
     async def _run_blocking_and_drain(
         self,
@@ -491,7 +504,6 @@ class FirmwareExtractor:
     ) -> None:
         """Do not let a non-native extraction thread outlive its work directory."""
         worker = asyncio.create_task(asyncio.to_thread(function, *args))
-        self._native_tasks.add(worker)
         deadline = asyncio.get_running_loop().time() + timeout
         try:
             while not worker.done():
@@ -515,8 +527,6 @@ class FirmwareExtractor:
             if not worker.done():
                 await self._drain_task(worker)
             raise
-        finally:
-            self._native_tasks.discard(worker)
 
     async def extract_reconstructed_firmware(
         self,

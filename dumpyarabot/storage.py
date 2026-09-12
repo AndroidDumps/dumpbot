@@ -61,6 +61,39 @@ class ReviewStorage:
             reviews[review.request_id] = review.model_dump()
 
     @staticmethod
+    async def update_pending_review(
+        context: ContextTypes.DEFAULT_TYPE,
+        review: PendingReview,
+    ) -> None:
+        """Update a review without extending its expiry."""
+        if USE_REDIS:
+            await RedisReviewStorage.update_pending_review(context, review)
+        else:
+            reviews = await ReviewStorage.get_pending_reviews(context)
+            if review.request_id not in reviews:
+                raise ValueError("Pending review no longer exists")
+            reviews[review.request_id] = review.model_dump()
+
+    @staticmethod
+    async def store_pending_review_with_options(
+        context: ContextTypes.DEFAULT_TYPE,
+        review: PendingReview,
+        options: AcceptOptionsState,
+    ) -> None:
+        """Store a review and its initial options as one persistence operation."""
+        if USE_REDIS:
+            await RedisReviewStorage.store_pending_review_with_options(
+                context,
+                review,
+                options,
+            )
+        else:
+            reviews = await ReviewStorage.get_pending_reviews(context)
+            states = context.bot_data.setdefault("options_states", {})
+            reviews[review.request_id] = review.model_dump()
+            states[review.request_id] = options.model_dump()
+
+    @staticmethod
     async def remove_pending_review(
         context: ContextTypes.DEFAULT_TYPE, request_id: str
     ) -> bool:

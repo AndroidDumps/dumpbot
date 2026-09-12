@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from dumpyarabot.privacy import redact_urls, sanitize_url
+from dumpyarabot.privacy import redact_for_job, sanitize_url
 from dumpyarabot.utils import escape_markdown
 
 if TYPE_CHECKING:
@@ -285,8 +285,7 @@ async def format_comprehensive_progress_message(
     Returns:
         Formatted progress message
     """
-    private = bool(job_data["dump_args"].get("use_privdump"))
-    current_step = redact_urls(current_step, private=private)
+    current_step = redact_for_job(current_step, job_data)
 
     # Generate progress bar
     progress_bar = generate_progress_bar(progress)
@@ -371,9 +370,11 @@ async def format_comprehensive_progress_message(
     # Keep failure edits concise; detailed errors are sent as an attached log file.
     if progress and progress.get("error_message") and metadata and metadata.get("error_context"):
         error_ctx = metadata["error_context"]
-        message += f"\n *Failed at:* {escape_markdown(error_ctx.get('current_step', 'Unknown step'))}\n"
+        failed_at = redact_for_job(error_ctx.get('current_step', 'Unknown step'), job_data)
+        message += f"\n *Failed at:* {escape_markdown(failed_at)}\n"
         if error_ctx.get("last_successful_step"):
-            message += f" *Last successful:* {escape_markdown(error_ctx['last_successful_step'])}\n"
+            last_successful = redact_for_job(error_ctx["last_successful_step"], job_data)
+            message += f" *Last successful:* {escape_markdown(last_successful)}\n"
 
     return message
 
@@ -561,8 +562,6 @@ def format_status_update_message(
 async def format_enhanced_job_status(job: "DumpJob") -> str:
     """Format detailed job status using ARQ metadata."""
     metadata = job.metadata.model_dump() if job.metadata else {}
-    private = job.dump_args.use_privdump
-
     text = f" *Job Details: {escape_markdown(job.job_id)}*\n\n"
     text += f" *Status:* {job.status.value.title()}\n"
 
@@ -581,14 +580,14 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
     # Progress info
     if job.progress:
         text += f" *Progress:* {job.progress.percentage:.1f}%\n"
-        current_step = redact_urls(job.progress.current_step, private=private)
+        current_step = redact_for_job(job.progress.current_step, job)
         text += f" *Current Step:* {current_step}\n"
 
     # Error details
     if metadata.get("error_context"):
         error = metadata["error_context"]
-        error_message = redact_urls(error.get('message', 'Unknown error'), private=private)
-        failed_at = redact_urls(error.get('current_step', 'Unknown step'), private=private)
+        error_message = redact_for_job(error.get('message', 'Unknown error'), job)
+        failed_at = redact_for_job(error.get('current_step', 'Unknown step'), job)
         text += f" *Error:* {escape_markdown(error_message)}\n"
         text += f" *Failed at:* {failed_at}\n"
 
@@ -620,7 +619,7 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
                     input_summary += f" + {len(job.dump_args.delta_urls)} ordered delta(s)"
 
             status = job.progress.current_step if job.progress else "Initializing"
-            status = redact_urls(status, private=job.dump_args.use_privdump)
+            status = redact_for_job(status, job)
             percentage = job.progress.percentage if job.progress else 0
 
             text += f"• `{job.job_id}` - {escape_markdown(input_summary)}\n"

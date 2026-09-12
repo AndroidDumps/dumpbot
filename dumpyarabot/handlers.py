@@ -81,6 +81,12 @@ async def dump(
         console.print("[red]Chat or message object is None[/red]")
         return
 
+    if chat.id == settings.REQUEST_CHAT_ID:
+        from dumpyarabot.moderated_handlers import handle_moderated_dump
+
+        await handle_moderated_dump(update, context)
+        return
+
     # Ensure it can only be used in the correct group
     if chat.id not in settings.ALLOWED_CHATS:
         # Do nothing

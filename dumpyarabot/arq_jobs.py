@@ -603,7 +603,9 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                         downloaded_paths[0],
                         cancellation_check=lambda: arq_pool.is_job_cancel_requested(job_id),
                     )
-                    if dump_job.dump_args.delta_urls or base_is_raw:
+                    if dump_job.dump_args.delta_urls or (
+                        base_is_raw and not dump_job.dump_args.use_alt_dumper
+                    ):
                         await extractor.extract_reconstructed_firmware(
                             dump_job,
                             downloaded_paths,
