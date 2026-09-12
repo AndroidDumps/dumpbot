@@ -1,7 +1,8 @@
+import asyncio
 import os
 import shutil
-from pathlib import Path
 from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import Tuple
 from urllib.parse import urlparse
 
@@ -9,9 +10,14 @@ import httpx
 from rich.console import Console
 
 from dumpyarabot.aria2_manager import Aria2Manager, DownloadProgress
-from dumpyarabot.schemas import DumpJob
+from dumpyarabot.file_utils import (
+    get_file_size_formatted,
+    get_latest_file_in_directory,
+    safe_remove_file,
+)
+from dumpyarabot.privacy import redact_urls, sanitize_url
 from dumpyarabot.process_utils import run_download_command
-from dumpyarabot.file_utils import get_latest_file_in_directory, safe_remove_file, get_file_size_formatted
+from dumpyarabot.schemas import DumpJob
 
 console = Console()
 
@@ -38,33 +44,58 @@ class FirmwareDownloader:
             on_progress: Optional async callback invoked with each DownloadProgress
                          snapshot during aria2 RPC downloads.
         """
-        url = str(job.dump_args.url)
+        return await self.download_url(
+            job,
+            str(job.dump_args.url),
+            on_progress=on_progress,
+        )
 
-        # Check if it's a local file
-        if os.path.isfile(url):
-            console.print(f"[green]Found local file: {url}[/green]")
-            # Copy to work directory
-            file_name = Path(url).name
-            dest_path = self.work_dir / file_name
-            shutil.copy2(url, dest_path)
-            return str(dest_path), file_name
+    async def download_url(
+        self,
+        job: DumpJob,
+        url: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> Tuple[str, str]:
+        """Download one ordered input without exposing private source details."""
+        private = job.dump_args.use_privdump
 
-        # Optimize URL with mirrors
-        optimized_url = await self._optimize_url(url)
-        console.print(f"[blue]Downloading from: {optimized_url}[/blue]")
+        try:
+            # Check if it's a local file
+            if os.path.isfile(url):
+                if not private:
+                    console.print(f"[green]Found local file: {url}[/green]")
+                file_name = Path(url).name
+                dest_path = self.work_dir / file_name
+                shutil.copy2(url, dest_path)
+                return str(dest_path), file_name
 
-        # Download based on URL type
-        file_path = await self._download_by_type(optimized_url, on_progress=on_progress)
-        file_name = Path(file_path).name
+            # Optimize URL with mirrors
+            optimized_url = await self._optimize_url(url, private=private)
+            if not private:
+                console.print(f"[blue]Downloading from: {sanitize_url(optimized_url)}[/blue]")
 
-        console.print(f"[green]Downloaded: {file_name} ({get_file_size_formatted(file_path)})[/green]")
-        return file_path, file_name
+            file_path = await self._download_by_type(
+                optimized_url,
+                on_progress=on_progress,
+                private=private,
+            )
+            file_name = Path(file_path).name
 
-    async def _optimize_url(self, url: str) -> str:
+            if not private:
+                console.print(f"[green]Downloaded: {file_name} ({get_file_size_formatted(file_path)})[/green]")
+            return file_path, file_name
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if private:
+                raise RuntimeError("Private firmware download failed") from None
+            raise e
+
+    async def _optimize_url(self, url: str, *, private: bool = False) -> str:
         """Optimize URL with best available mirrors."""
         # Xiaomi mirror optimization
         if "d.miui.com" in url:
-            return await self._optimize_xiaomi_url(url)
+            return await self._optimize_xiaomi_url(url, private=private)
 
         # Pixeldrain optimization
         if "pixeldrain.com/u" in url:
@@ -77,7 +108,7 @@ class FirmwareDownloader:
 
         return url
 
-    async def _optimize_xiaomi_url(self, url: str) -> str:
+    async def _optimize_xiaomi_url(self, url: str, *, private: bool = False) -> str:
         """Find best Xiaomi mirror."""
         # Skip if already using recommended mirror
         if "cdnorg" in url or "bkt-sgp-miui-ota-update-alisgp" in url:
@@ -109,38 +140,49 @@ class FirmwareDownloader:
             for mirror in mirrors:
                 test_url = f"{mirror}/{file_path}"
                 try:
-                    console.print(f"[blue]Testing mirror: {mirror}[/blue]")
+                    if not private:
+                        console.print(f"[blue]Testing mirror: {mirror}[/blue]")
                     response = await client.head(test_url, timeout=10.0)
                     if response.status_code != 404:
-                        console.print(f"[green]Using mirror: {mirror}[/green]")
+                        if not private:
+                            console.print(f"[green]Using mirror: {mirror}[/green]")
                         return test_url
                 except Exception as e:
-                    console.print(f"[yellow]Mirror {mirror} failed: {e}[/yellow]")
+                    if not private:
+                        console.print(
+                            f"[yellow]Mirror {mirror} failed: "
+                            f"{redact_urls(e, private=False)}[/yellow]"
+                        )
                     continue
 
         console.print("[yellow]All mirrors failed, using original URL[/yellow]")
         return url
 
     async def _download_by_type(
-        self, url: str, on_progress: ProgressCallback | None = None
+        self,
+        url: str,
+        on_progress: ProgressCallback | None = None,
+        *,
+        private: bool = False,
     ) -> str:
         """Download file based on URL type."""
         if "drive.google.com" in url:
-            return await self._download_google_drive(url)
+            return await self._download_google_drive(url, private=private)
         elif "mediafire.com" in url:
-            return await self._download_mediafire(url)
+            return await self._download_mediafire(url, private=private)
         elif "mega.nz" in url:
-            return await self._download_mega(url)
+            return await self._download_mega(url, private=private)
         else:
-            return await self._download_default(url, on_progress=on_progress)
+            return await self._download_default(url, on_progress=on_progress, private=private)
 
-    async def _download_google_drive(self, url: str) -> str:
+    async def _download_google_drive(self, url: str, *, private: bool = False) -> str:
         """Download from Google Drive using gdown."""
         result = await run_download_command(
             "uvx", "gdown@5.2.0", "-q", url, "--fuzzy",
             cwd=self.work_dir,
             timeout=1800.0,  # 30 minutes for large files
-            description="Downloading from Google Drive"
+            description="Downloading from Google Drive",
+            quiet=True,
         )
 
         if not result.success:
@@ -153,14 +195,15 @@ class FirmwareDownloader:
 
         return str(latest_file)
 
-    async def _download_mediafire(self, url: str) -> str:
+    async def _download_mediafire(self, url: str, *, private: bool = False) -> str:
         """Download from MediaFire using mediafire-dl."""
         result = await run_download_command(
             "uvx", "--from", "git+https://github.com/Juvenal-Yescas/mediafire-dl@master",
             "mediafire-dl", url,
             cwd=self.work_dir,
             timeout=1800.0,  # 30 minutes for large files
-            description="Downloading from MediaFire"
+            description="Downloading from MediaFire",
+            quiet=True,
         )
 
         if not result.success:
@@ -173,13 +216,14 @@ class FirmwareDownloader:
 
         return str(latest_file)
 
-    async def _download_mega(self, url: str) -> str:
+    async def _download_mega(self, url: str, *, private: bool = False) -> str:
         """Download from MEGA using megatools."""
         result = await run_download_command(
             "megatools", "dl", url,
             cwd=self.work_dir,
             timeout=1800.0,  # 30 minutes for large files
-            description="Downloading from MEGA"
+            description="Downloading from MEGA",
+            quiet=True,
         )
 
         if not result.success:
@@ -193,21 +237,28 @@ class FirmwareDownloader:
         return str(latest_file)
 
     async def _download_default(
-        self, url: str, on_progress: ProgressCallback | None = None
+        self,
+        url: str,
+        on_progress: ProgressCallback | None = None,
+        *,
+        private: bool = False,
     ) -> str:
         """Download using aria2 RPC (with live progress) and wget fallback."""
         # --- Try aria2 RPC first ---
         aria2_failed = False
         aria2_error = ""
         try:
-            async with Aria2Manager(str(self.work_dir)) as aria2:
+            async with Aria2Manager(
+                str(self.work_dir), log_download_names=False
+            ) as aria2:
                 async for progress in aria2.download(url, poll_interval=3.0, timeout=1800.0):
                     if on_progress:
                         try:
                             await on_progress(progress)
                         except Exception as cb_err:
                             # Don't let a Telegram/callback error kill the download
-                            console.print(f"[yellow]Progress callback error (ignored): {cb_err}[/yellow]")
+                            if not private:
+                                console.print(f"[yellow]Progress callback error (ignored): {cb_err}[/yellow]")
 
                 # Download finished successfully
                 downloaded = aria2.get_downloaded_file_path()
@@ -222,7 +273,11 @@ class FirmwareDownloader:
             # Keep the actual aria2 reason (error code + message); the console line
             # only reaches journald, so we also stash it for the final exception.
             aria2_error = str(e) or repr(e)
-            console.print(f"[yellow]aria2 RPC download failed: {aria2_error}[/yellow]")
+            if not private:
+                console.print(
+                    f"[yellow]aria2 RPC download failed: "
+                    f"{redact_urls(aria2_error, private=False)}[/yellow]"
+                )
             aria2_failed = True
 
         if not aria2_failed:
@@ -242,7 +297,8 @@ class FirmwareDownloader:
             "wget", "-nv", "--no-check-certificate", url,
             cwd=self.work_dir,
             timeout=1800.0,
-            description="Downloading with wget fallback"
+            description="Downloading with wget fallback",
+            quiet=True,
         )
 
         if not result.success:
@@ -261,5 +317,3 @@ class FirmwareDownloader:
             )
 
         return str(latest_file)
-
-

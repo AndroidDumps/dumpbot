@@ -6,19 +6,23 @@ while preserving all Telegram messaging features and cross-chat functionality.
 
 import asyncio
 import re
+import shutil
 import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlsplit, urlunsplit
 
 from rich.console import Console
 
 from dumpyarabot.aria2_manager import DownloadProgress
 from dumpyarabot.config import settings
 from dumpyarabot.firmware_downloader import FirmwareDownloader
-from dumpyarabot.firmware_extractor import FirmwareExtractor
+from dumpyarabot.firmware_extractor import (
+    FirmwareExtractor,
+    JobCancelledError,
+    NativeExtractionCancelled,
+)
 from dumpyarabot.gitlab_manager import (
     GITLAB_BASE_URL,
     BranchAlreadyExistsError,
@@ -30,6 +34,12 @@ from dumpyarabot.message_formatting import (
     format_download_progress,
 )
 from dumpyarabot.message_queue import message_queue
+from dumpyarabot.privacy import (
+    is_private_job,
+    redact_for_job,
+    redact_urls,
+    sanitize_url,
+)
 from dumpyarabot.process_utils import reset_current_job_id, set_current_job_id
 from dumpyarabot.property_extractor import PropertyExtractor
 from dumpyarabot.schemas import DumpJob
@@ -43,22 +53,18 @@ _SENSITIVE_PATTERNS = [
     re.compile(r'(token[=:]\s*)\S+', re.IGNORECASE),
     re.compile(r'(password[=:]\s*)\S+', re.IGNORECASE),
 ]
-_URL_PATTERN = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
 
 
-def _sanitize_traceback(tb_str: str) -> str:
+def _sanitize_traceback(tb_str: str, *, private: bool = False) -> str:
     """Remove sensitive tokens and credentials from traceback strings."""
     for pattern in _SENSITIVE_PATTERNS:
         tb_str = pattern.sub(r'\1[REDACTED]', tb_str)
-    return _URL_PATTERN.sub(
-        lambda match: _sanitize_url_for_log(match.group(0).rstrip(".,;:!?)\"]}'")),
-        tb_str,
-    )
+    return redact_urls(tb_str, private=private)
 
 
-def _sanitize_text(value: Any) -> str:
+def _sanitize_text(value: Any, *, private: bool = False) -> str:
     """Sanitize arbitrary log text."""
-    return _sanitize_traceback(str(value))
+    return _sanitize_traceback(str(value), private=private)
 
 
 def _derive_last_successful_step(progress_history: list[Dict[str, Any]], failed_step: Optional[str] = None) -> Optional[str]:
@@ -79,27 +85,7 @@ def _derive_last_successful_step(progress_history: list[Dict[str, Any]], failed_
 
 def _sanitize_url_for_log(url_value: Any) -> str:
     """Redact credentials and query parameters from logged URLs."""
-    url = str(url_value or "unknown")
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url
-
-    try:
-        hostname = parts.hostname or ""
-        port = parts.port
-        username = parts.username
-    except ValueError:
-        return url
-
-    netloc = hostname
-    if port:
-        netloc = f"{netloc}:{port}"
-    if username:
-        netloc = f"[REDACTED]@{netloc}"
-
-    sanitized = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-    return sanitized or url
+    return sanitize_url(url_value)
 
 
 class PeriodicTimerUpdate:
@@ -253,8 +239,12 @@ def _build_failure_log_text(job_data: Dict[str, Any]) -> str:
 
     lines.append(f"Job ID:   {job_data.get('job_id', 'unknown')}")
     lines.append(f"Worker:   {job_data.get('worker_id', 'unknown')}")
-    url = (job_data.get("dump_args") or {}).get("url", "unknown")
-    lines.append(f"URL:      {_sanitize_url_for_log(url)}")
+    private = is_private_job(job_data)
+    if private:
+        lines.append("URL:      [hidden for private dump]")
+    else:
+        url = (job_data.get("dump_args") or {}).get("url", "unknown")
+        lines.append(f"URL:      {_sanitize_url_for_log(url)}")
 
     metadata = job_data.get("metadata") or {}
     lines.append(f"Started:  {metadata.get('start_time', 'unknown')}")
@@ -268,19 +258,19 @@ def _build_failure_log_text(job_data: Dict[str, Any]) -> str:
             pct_display = f"{float(entry.get('percentage', 0) or 0):.0f}%"
         except (TypeError, ValueError):
             pct_display = "?%"
-        lines.append(f"[{ts}] ({pct_display}) {_sanitize_text(msg)}")
+        lines.append(f"[{ts}] ({pct_display}) {redact_for_job(_sanitize_text(msg), job_data)}")
 
     error_ctx = metadata.get("error_context") or {}
     if error_ctx:
         lines.append("\n=== ERROR CONTEXT ===")
-        lines.append(f"Failed at:       {_sanitize_text(error_ctx.get('current_step', 'unknown'))}")
+        lines.append(f"Failed at:       {redact_for_job(_sanitize_text(error_ctx.get('current_step', 'unknown')), job_data)}")
         if error_ctx.get('last_successful_step'):
-            lines.append(f"Last successful: {_sanitize_text(error_ctx['last_successful_step'])}")
-        lines.append(f"Error message:   {_sanitize_text(error_ctx.get('message', 'unknown'))}")
+            lines.append(f"Last successful: {redact_for_job(_sanitize_text(error_ctx['last_successful_step']), job_data)}")
+        lines.append(f"Error message:   {redact_for_job(_sanitize_text(error_ctx.get('message', 'unknown')), job_data)}")
         tb = error_ctx.get("traceback")
         if tb:
             lines.append("\n=== TRACEBACK (sanitized) ===")
-            lines.append(_sanitize_traceback(tb))
+            lines.append(redact_for_job(_sanitize_traceback(tb), job_data))
 
     return "\n".join(lines)
 
@@ -388,11 +378,19 @@ async def _send_failure_notification(
                     caption="Failure log",
                 )
             except Exception as log_err:
-                console.print(f"[yellow]Could not queue failure log file: {log_err}[/yellow]")
+                console.print(
+                    f"[yellow]Could not queue failure log file: "
+                    f"{redact_urls(log_err, private=is_private_job(job_data))}[/yellow]"
+                )
 
     except Exception as e:
-        console.print(f"[red]Failed to send failure notification: {e}[/red]")
-        console.print_exception()
+        private = is_private_job(job_data)
+        console.print(
+            f"[red]Failed to send failure notification: "
+            f"{redact_urls(e, private=private)}[/red]"
+        )
+        if not private:
+            console.print_exception()
 
 
 async def _validate_gitlab_access() -> None:
@@ -415,6 +413,8 @@ async def update_progress_with_metadata(
 ) -> None:
     """Helper function for progress updates with metadata tracking."""
     metadata = job_data["metadata"]
+    private = is_private_job(job_data)
+    step = redact_urls(step, private=private)
 
     progress_update = {
         "message": step,
@@ -423,7 +423,14 @@ async def update_progress_with_metadata(
     }
 
     if extra_info:
-        progress_update.update(extra_info)
+        progress_update.update(
+            {
+                key: redact_urls(value, private=True)
+                if private and isinstance(value, str)
+                else value
+                for key, value in extra_info.items()
+            }
+        )
 
     metadata["progress_history"].append(progress_update)
 
@@ -448,6 +455,14 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
     try:
         # Initialize metadata
         job_data["metadata"] = job_data.get("metadata", {})
+        if is_private_job(job_data):
+            telegram_context = job_data["metadata"].get("telegram_context") or {}
+            telegram_context.pop("url", None)
+            job_data["metadata"]["telegram_context"] = telegram_context
+            if "_queued_text" in job_data:
+                job_data["_queued_text"] = redact_urls(
+                    job_data["_queued_text"], private=True
+                )
         job_data["metadata"].update({
             "start_time": datetime.now(timezone.utc).isoformat(),
             "progress_history": [],
@@ -469,16 +484,17 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
         try:
             await message_queue.verify_telegram_context(job_data)
         except Exception as e:
-            console.print(f"[red]Job {job_id}: aborting early - {e}[/red]")
+            safe_error = redact_for_job(e, job_data)
+            console.print(f"[red]Job {job_id}: aborting early - {safe_error}[/red]")
             job_data["metadata"].update({
                 "status": "failed",
                 "end_time": datetime.now(timezone.utc).isoformat(),
-                "error_context": {"message": str(e), "current_step": "Telegram verification"},
+                "error_context": {"message": safe_error, "current_step": "Telegram verification"},
             })
             # Do not queue a failure notification from this early-return path.
             # Preflight failures can include Telegram reachability problems or
             # transient Redis/bot initialization failures before normal job setup.
-            return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+            return {"success": False, "error": safe_error, "metadata": job_data["metadata"]}
 
         # Validate custom work-dir base (if configured) before creating the
         # per-job tempdir. Fail loudly — silent fallback to the system tempdir
@@ -512,7 +528,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             try:
                 # Initialize components (exact same as original)
                 await _raise_if_job_cancel_requested(job_id)
-                downloader = FirmwareDownloader(str(work_dir))
                 extractor = FirmwareExtractor(str(work_dir))
                 prop_extractor = PropertyExtractor(str(work_dir))
                 gitlab_manager = GitLabManager(str(work_dir))
@@ -533,12 +548,18 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 # Create DumpJob object for components that need it
                 dump_job = DumpJob.model_validate(job_data)
+                ordered_urls = [str(dump_job.dump_args.url), *map(str, dump_job.dump_args.delta_urls)]
+                input_root = work_dir / ".firmware_inputs"
+                input_root.mkdir()
+                downloaded_paths: list[str] = []
 
                 # Download with live progress via aria2 RPC callback.
                 # Download progress is mapped into the 15%-50% band of overall job progress.
                 async def _on_download_progress(dp: DownloadProgress) -> None:
-                    dl_pct = dp.percentage  # 0-100 within download
-                    overall_pct = 15.0 + (dl_pct / 100.0) * 35.0  # map to 15%-50%
+                    dl_pct = dp.percentage  # 0-100 within this download
+                    completed_inputs = len(downloaded_paths)
+                    aggregate_pct = (completed_inputs + dl_pct / 100.0) / len(ordered_urls)
+                    overall_pct = 15.0 + aggregate_pct * 35.0
                     dl_info = format_download_progress(dp)
                     step_msg = f" Downloading firmware...\n{dl_info}"
 
@@ -560,9 +581,15 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "percentage": 15.0,
                 }
                 async with PeriodicTimerUpdate(job_data, " Downloading firmware...", download_progress):
-                    firmware_path, firmware_name = await downloader.download_firmware(
-                        dump_job, on_progress=_on_download_progress
-                    )
+                    for index, url in enumerate(ordered_urls):
+                        await _raise_if_job_cancel_requested(job_id)
+                        downloader = FirmwareDownloader(str(input_root / f"input_{index:03d}"))
+                        firmware_path, _ = await downloader.download_url(
+                            dump_job,
+                            url,
+                            on_progress=_on_download_progress,
+                        )
+                        downloaded_paths.append(firmware_path)
 
                 # Step 5: Download completed (50%)
                 await update_progress_with_metadata(job_data, " Firmware download completed", 50.0)
@@ -572,7 +599,24 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 # Use periodic timer for extraction operation
                 async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 52.0}):
-                    await extractor.extract_firmware(dump_job, firmware_path)
+                    base_is_raw = await extractor.classify_raw_image_archive(
+                        downloaded_paths[0],
+                        cancellation_check=lambda: arq_pool.is_job_cancel_requested(job_id),
+                    )
+                    if dump_job.dump_args.delta_urls or base_is_raw:
+                        await extractor.extract_reconstructed_firmware(
+                            dump_job,
+                            downloaded_paths,
+                            cancellation_check=lambda: arq_pool.is_job_cancel_requested(job_id),
+                            base_is_raw=base_is_raw,
+                        )
+                    else:
+                        await extractor.extract_firmware(dump_job, downloaded_paths[0])
+
+                # Input directories live under the publication root. Remove the
+                # entire tree so retries/sidecars can never be committed.
+                if input_root.exists():
+                    shutil.rmtree(input_root)
 
                 # Step 7: Firmware extraction completed (56%)
                 await update_progress_with_metadata(job_data, " Firmware extraction completed", 56.0)
@@ -683,20 +727,23 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "repository_url": e.repo_url,
                     "metadata": job_data["metadata"],
                 }
-            except JobCancelledError as e:
+            except (JobCancelledError, NativeExtractionCancelled) as e:
+                safe_error = redact_for_job(e, job_data)
                 job_data["metadata"].update({
                     "status": "cancelled",
                     "end_time": datetime.now(timezone.utc).isoformat(),
                     "error_context": {
-                        "message": str(e),
+                        "message": safe_error,
                         "current_step": "Cancellation requested",
                         "failure_time": datetime.now(timezone.utc).isoformat(),
                     }
                 })
-                await _send_failure_notification(job_data, str(e))
-                return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+                await _send_failure_notification(job_data, safe_error)
+                return {"success": False, "error": safe_error, "metadata": job_data["metadata"]}
             except Exception as e:
-                console.print(f"[red]Error in inner processing for job {job_id}: {e}[/red]")
+                private = is_private_job(job_data)
+                safe_error = redact_for_job(e, job_data)
+                console.print(f"[red]Error in inner processing for job {job_id}: {safe_error}[/red]")
 
                 # Enhanced error handling
                 metadata = job_data.get("metadata") or {}
@@ -706,25 +753,28 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "status": "failed",
                     "end_time": datetime.now(timezone.utc).isoformat(),
                     "error_context": {
-                        "message": str(e),
+                        "message": safe_error,
                         "current_step": progress_history[-1].get("message", "Unknown step") if progress_history else "Unknown step",
                         "last_successful_step": _derive_last_successful_step(
                             progress_history,
                             progress_history[-1].get("message") if progress_history else None,
                         ),
                         "failure_time": datetime.now(timezone.utc).isoformat(),
-                        "traceback": _sanitize_traceback(traceback.format_exc())
+                        "traceback": redact_for_job(_sanitize_traceback(traceback.format_exc()), job_data)
                     }
                 })
 
                 # Send failure notification using existing message queue system
-                await _send_failure_notification(job_data, str(e))
+                await _send_failure_notification(job_data, safe_error)
 
-                return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+                return {"success": False, "error": safe_error, "metadata": job_data["metadata"]}
 
     except Exception as e:
-        console.print(f"[red]Critical error processing job {job_id}: {e}[/red]")
-        console.print_exception()
+        private = is_private_job(job_data)
+        safe_error = redact_for_job(e, job_data)
+        console.print(f"[red]Critical error processing job {job_id}: {safe_error}[/red]")
+        if not private:
+            console.print_exception()
 
         # Enhanced error handling for critical errors
         metadata = job_data.get("metadata") or {}
@@ -734,21 +784,24 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             "status": "failed",
             "end_time": datetime.now(timezone.utc).isoformat(),
             "error_context": {
-                "message": f"Critical error: {str(e)}",
+                "message": f"Critical error: {safe_error}",
                 "current_step": "Critical failure",
                 "last_successful_step": _derive_last_successful_step(progress_history) or "None",
                 "failure_time": datetime.now(timezone.utc).isoformat(),
-                "traceback": _sanitize_traceback(traceback.format_exc())
+                "traceback": redact_for_job(_sanitize_traceback(traceback.format_exc()), job_data)
             }
         })
 
         # Send failure notification for any unhandled exceptions
         try:
-            await _send_failure_notification(job_data, f"Critical error: {str(e)}")
+            await _send_failure_notification(job_data, f"Critical error: {safe_error}")
         except Exception as notification_error:
-            console.print(f"[red]Failed to send failure notification: {notification_error}[/red]")
+            console.print(
+                f"[red]Failed to send failure notification: "
+                f"{redact_urls(notification_error, private=private)}[/red]"
+            )
 
-        return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+        return {"success": False, "error": safe_error, "metadata": job_data["metadata"]}
     finally:
         if job_token is not None:
             reset_current_job_id(job_token)
@@ -756,10 +809,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
         # which runs AFTER ARQ's finish_job has deleted arq:in-progress. Clearing
         # running_job here would happen BEFORE finish_job, recreating the very
         # teardown race that prompted moving to a hook in the first place.
-
-
-class JobCancelledError(Exception):
-    """Raised when a cooperative cancellation request is detected."""
 
 
 async def _raise_if_job_cancel_requested(job_id: str) -> None:

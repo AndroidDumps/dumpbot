@@ -4,19 +4,25 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Awaitable, Dict, Optional, List, TypeVar
+from typing import Any, Awaitable, Dict, List, Optional, TypeVar
 
 import redis.asyncio as redis
+import telegram
 from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from telegram import Bot
-from telegram.error import RetryAfter, TelegramError, NetworkError, BadRequest
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.request import HTTPXRequest
-import telegram
 
 from dumpyarabot import lua_scripts
 from dumpyarabot.config import settings
-from dumpyarabot.schemas import DumpArguments, DumpJob, JobCancelResult, JobProgress, JobStatus
+from dumpyarabot.schemas import (
+    DumpArguments,
+    DumpJob,
+    JobCancelResult,
+    JobProgress,
+    JobStatus,
+)
 
 console = Console()
 
@@ -829,6 +835,7 @@ class MessageQueue:
 
             if message.type == MessageType.DOCUMENT:
                 import io
+
                 from telegram import InputFile
 
                 if not message.document_content_b64 or not message.document_filename:
@@ -1219,7 +1226,7 @@ class MessageQueue:
         Raises RuntimeError for non-retryable failures (bot blocked, message/chat gone)
         so the caller can abort the job before doing any heavy work.
         """
-        from telegram.error import Forbidden, BadRequest
+        from telegram.error import BadRequest, Forbidden
 
         try:
             bot = await self._ensure_bot()
@@ -1388,7 +1395,7 @@ class MessageQueue:
 
         dump_args_data = job_payload.get("dump_args") or {}
         telegram_context = metadata.get("telegram_context") or {}
-        url = telegram_context.get("url") or dump_args_data.get("url")
+        url = dump_args_data.get("url") or telegram_context.get("url")
 
         if not url:
             return None
@@ -1399,6 +1406,7 @@ class MessageQueue:
             "status": self._arq_status_to_job_status(arq_status["status"]),
             "dump_args": DumpArguments(
                 url=url,
+                delta_urls=dump_args_data.get("delta_urls") or [],
                 use_alt_dumper=dump_args_data.get("use_alt_dumper", False),
                 force=dump_args_data.get("force", False),
                 use_privdump=dump_args_data.get("use_privdump", False),

@@ -1,23 +1,36 @@
 import re
-from datetime import datetime, timezone
 import secrets
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from rich.console import Console
 from telegram import Chat, Message, ReplyParameters, Update
 from telegram.ext import ContextTypes
 
-from dumpyarabot import schemas, utils, url_utils
-from dumpyarabot.utils import escape_markdown
-from dumpyarabot.config import (CALLBACK_ACCEPT, CALLBACK_CANCEL_REQUEST,
-                                CALLBACK_REJECT, CALLBACK_SUBMIT_ACCEPTANCE,
-                                CALLBACK_TOGGLE_ALT, CALLBACK_TOGGLE_FORCE,
-                                CALLBACK_TOGGLE_PRIVDUMP, settings)
-from dumpyarabot.message_formatting import generate_progress_bar
+from dumpyarabot import schemas, url_utils, utils
+from dumpyarabot.config import (
+    CALLBACK_ACCEPT,
+    CALLBACK_CANCEL_REQUEST,
+    CALLBACK_REJECT,
+    CALLBACK_SUBMIT_ACCEPTANCE,
+    CALLBACK_TOGGLE_ALT,
+    CALLBACK_TOGGLE_FORCE,
+    CALLBACK_TOGGLE_PRIVDUMP,
+    settings,
+)
+from dumpyarabot.message_formatting import format_firmware_inputs, generate_progress_bar
 from dumpyarabot.message_queue import message_queue
+from dumpyarabot.privacy import redact_for_job, redact_urls, sanitize_url
 from dumpyarabot.storage import ReviewStorage
-from dumpyarabot.ui import (ACCEPTANCE_TEMPLATE, REJECTION_TEMPLATE, REVIEW_TEMPLATE, SUBMISSION_TEMPLATE,
-                            create_options_keyboard, create_review_keyboard)
+from dumpyarabot.ui import (
+    ACCEPTANCE_TEMPLATE,
+    REJECTION_TEMPLATE,
+    REVIEW_TEMPLATE,
+    SUBMISSION_TEMPLATE,
+    create_options_keyboard,
+    create_review_keyboard,
+)
+from dumpyarabot.utils import escape_markdown
 
 console = Console()
 
@@ -55,27 +68,31 @@ async def _create_status_message(
 ) -> tuple[int, int, str]:
     """Create the bot-owned status message that later worker updates will edit."""
     primary_allowed_chat = settings.ALLOWED_CHATS[0] if settings.ALLOWED_CHATS else pending_review.review_chat_id
-    initial_text = _build_status_message_text(pending_review.url, dump_args, job_id)
+    initial_text = _build_status_message_text(dump_args, job_id)
 
+    reply_parameters = None
+    if not dump_args.use_privdump:
+        reply_parameters = ReplyParameters(
+            message_id=pending_review.original_message_id,
+            chat_id=pending_review.original_chat_id,
+        )
     status_message = await context.bot.send_message(
         chat_id=primary_allowed_chat,
         text=initial_text,
         parse_mode=settings.DEFAULT_PARSE_MODE,
         disable_web_page_preview=True,
-        reply_parameters=ReplyParameters(
-            message_id=pending_review.original_message_id,
-            chat_id=pending_review.original_chat_id,
-        ),
+        reply_parameters=reply_parameters,
     )
     return status_message.message_id, primary_allowed_chat, initial_text
 
 
-def _build_status_message_text(url: str, dump_args: schemas.DumpArguments, job_id: str) -> str:
+def _build_status_message_text(dump_args: schemas.DumpArguments, job_id: str) -> str:
     """Build the initial worker status message text."""
     if dump_args.use_privdump:
         initial_text = " *Private Dump Job Queued*\n\n"
     else:
-        initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
+        initial_text = " *Firmware Dump Queued*\n\n"
+        initial_text += format_firmware_inputs(dump_args.model_dump())
 
     initial_text += f"*Job ID:* `{job_id}`\n"
 
@@ -113,38 +130,46 @@ async def handle_request_message(
         console.print(f"[yellow]Message from non-request chat: {chat.id}[/yellow]")
         return
 
-    # 2. Parse message for "#request <URL>" pattern (flexible format)
-    # Supports: "#requesthttps://...", "#request https://...", "#request please https://...", etc.
-    # DOTALL flag allows . to match newlines for multi-line messages
-    request_pattern = r"#request\s*.*?(https?://[^\s]+)"
-    match = re.search(request_pattern, message.text or "", re.IGNORECASE | re.DOTALL)
+    # 2. Capture every ordered URL following the #request tag.
+    raw_message = message.text or ""
+    tag_match = re.search(r"#request", raw_message, re.IGNORECASE)
+    url_strings = (
+        re.findall(r"https?://[^\s]+", raw_message[tag_match.end() :], re.IGNORECASE)
+        if tag_match
+        else []
+    )
 
-    if not match:
+    if not url_strings:
         console.print("[yellow]No valid #request pattern found[/yellow]")
         return
 
-    url_str = match.group(1)
-    console.print(f"[blue]Processing request for URL: {url_str}[/blue]")
+    console.print(f"[blue]Processing request with {len(url_strings)} firmware URL(s)[/blue]")
 
     try:
-        # 3. Validate URL using new utility
-        is_valid, validated_url, error_msg = await url_utils.validate_and_normalize_url(url_str)
-        if not is_valid:
-            raise ValueError(error_msg)
+        # 3. Validate every URL without changing its order.
+        validated_urls = []
+        for url_str in url_strings:
+            is_valid, validated_url, error_msg = await url_utils.validate_and_normalize_url(url_str)
+            if not is_valid or validated_url is None:
+                raise ValueError(error_msg)
+            validated_urls.append(validated_url)
 
         # 4. Generate request_id
         request_id = utils.generate_request_id()
 
         # 5. Send review message to REVIEW_CHAT_ID with Accept/Reject buttons
-        raw_message = message.text or ""
         # Remove the URL from the original message since it's already displayed above
         message_without_url = re.sub(r'https?://[^\s]+', '', raw_message).strip()
         # Remove #request tag and extra whitespace
         message_without_url = re.sub(r'#request\s*', '', message_without_url).strip()
         original_message = _truncate_message(message_without_url) if message_without_url else "No additional text"
+        url_summary = "\n".join(
+            f"{index}. {escape_markdown(sanitize_url(url))}"
+            for index, url in enumerate(validated_urls, start=1)
+        )
         review_text = REVIEW_TEMPLATE.format(
             username=escape_markdown(user.username or user.first_name or str(user.id)),
-            url=escape_markdown(str(validated_url)),
+            url=url_summary,
             request_id=request_id,
             original_message=escape_markdown(original_message),
         )
@@ -169,7 +194,7 @@ async def handle_request_message(
         # 6. Notify user of successful submission directly to get real Telegram message ID
         submission_message = await message_queue.send_immediate_message(
             chat_id=chat.id,
-            text=SUBMISSION_TEMPLATE.format(url=validated_url),
+            text=SUBMISSION_TEMPLATE.format(url=url_summary),
             parse_mode=settings.DEFAULT_PARSE_MODE,
             reply_to_message_id=message.message_id,
             disable_web_page_preview=True,
@@ -182,7 +207,8 @@ async def handle_request_message(
             original_message_id=message.message_id,
             requester_id=user.id,
             requester_username=user.username,
-            url=str(validated_url),  # Convert AnyHttpUrl to string for storage
+            url=validated_urls[0],
+            delta_urls=validated_urls[1:],
             review_chat_id=settings.REVIEW_CHAT_ID,
             review_message_id=review_message.message_id,
             submission_confirmation_message_id=submission_message.message_id,
@@ -193,11 +219,11 @@ async def handle_request_message(
         console.print(f"[green]Request {request_id} processed successfully[/green]")
 
     except ValueError:
-        console.print(f"[red]Invalid URL provided: {url_str}[/red]")
+        console.print("[red]Invalid URL provided in moderated request[/red]")
         await message_queue.send_error(
             chat_id=chat.id,
             text=" Invalid URL format provided",
-            context={"moderated_request": True, "url": url_str, "error": "invalid_url"}
+            context={"moderated_request": True, "error": "invalid_url"},
         )
     except Exception as e:
         console.print(f"[red]Error processing request: {e}[/red]")
@@ -205,7 +231,7 @@ async def handle_request_message(
         await message_queue.send_error(
             chat_id=chat.id,
             text=" An error occurred while processing your request",
-            context={"moderated_request": True, "url": url_str, "error": "processing_failed"}
+            context={"moderated_request": True, "error": "processing_failed"},
         )
 
 
@@ -267,7 +293,11 @@ async def _handle_accept_callback(
 
     # Update message to show options
     await query.edit_message_text(
-        text=f" Configure options for request {request_id}\nURL: {pending_review.url}",
+        text=(
+            f" Configure options for request {request_id}\n"
+            f"URL: {sanitize_url(pending_review.url)}\n"
+            f"Delta OTAs: {len(pending_review.delta_urls)}"
+        ),
         reply_markup=create_options_keyboard(request_id, options_state),
         disable_web_page_preview=True,
     )
@@ -341,10 +371,11 @@ async def _handle_submit_callback(
         # Create DumpArguments with the selected options
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
+            delta_urls=pending_review.delta_urls,
             use_alt_dumper=options_state.alt,
             force=options_state.force,
             use_privdump=options_state.privdump,
-            initial_message_id=pending_review.original_message_id,
+            initial_message_id=None if options_state.privdump else pending_review.original_message_id,
             initial_chat_id=pending_review.original_chat_id,
         )
 
@@ -368,15 +399,13 @@ async def _handle_submit_callback(
         # Create enhanced job data with metadata structure
         enhanced_job_data = job.model_dump()
         enhanced_job_data["_queued_text"] = queued_text
-        enhanced_job_data["metadata"] = {
-            "telegram_context": {
+        telegram_context = {
                 "chat_id": pending_review.original_chat_id,
                 "message_id": pending_review.original_message_id,
                 "user_id": pending_review.requester_id,
-                "url": pending_review.url,
                 "moderated_request": True,
-            }
         }
+        enhanced_job_data["metadata"] = {"telegram_context": telegram_context}
 
         console.print(f"[blue]Queueing dump job {job.job_id} with metadata...[/blue]")
         job_id = await message_queue.queue_dump_job_with_metadata(enhanced_job_data)
@@ -393,13 +422,25 @@ async def _handle_submit_callback(
         console.print(f"[green]Sending acceptance message to user: {user_message}[/green]")
         console.print(f"[blue]Chat ID: {pending_review.original_chat_id}, Message ID: {pending_review.original_message_id}[/blue]")
 
-        await message_queue.send_cross_chat(
-            chat_id=pending_review.original_chat_id,
-            text=user_message,
-            reply_to_message_id=pending_review.original_message_id,
-            reply_to_chat_id=pending_review.original_chat_id,
-            context={"moderated_request": True, "request_id": request_id, "stage": "acceptance"}
-        )
+        notification_context = {
+            "moderated_request": True,
+            "request_id": request_id,
+            "stage": "acceptance",
+        }
+        if options_state.privdump:
+            await message_queue.send_reply(
+                chat_id=pending_review.original_chat_id,
+                text=user_message,
+                context=notification_context,
+            )
+        else:
+            await message_queue.send_cross_chat(
+                chat_id=pending_review.original_chat_id,
+                text=user_message,
+                reply_to_message_id=pending_review.original_message_id,
+                reply_to_chat_id=pending_review.original_chat_id,
+                context=notification_context,
+            )
 
         console.print("[green]Acceptance message sent successfully[/green]")
 
@@ -408,10 +449,16 @@ async def _handle_submit_callback(
         await _cleanup_request(context, request_id)
 
     except Exception as e:
-        console.print(f"[red]Error processing acceptance: {e}[/red]")
-        console.print_exception()
+        safe_error = (
+            redact_for_job(e, dump_args)
+            if options_state.privdump and "dump_args" in locals()
+            else redact_urls(e, private=options_state.privdump)
+        )
+        console.print(f"[red]Error processing acceptance: {safe_error}[/red]")
+        if not options_state.privdump:
+            console.print_exception()
         await query.edit_message_text(
-            f" Error processing request {request_id}: {str(e)}"
+            f" Error processing request {request_id}: {safe_error}"
         )
 
 
@@ -491,10 +538,11 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Start dump process with options
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
+            delta_urls=pending_review.delta_urls,
             use_alt_dumper=use_alt,
             force=force,
             use_privdump=use_privdump,
-            initial_message_id=pending_review.original_message_id,
+            initial_message_id=None if use_privdump else pending_review.original_message_id,
             initial_chat_id=pending_review.original_chat_id,
         )
 
@@ -518,15 +566,13 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Create enhanced job data with metadata structure
         enhanced_job_data = job.model_dump()
         enhanced_job_data["_queued_text"] = queued_text
-        enhanced_job_data["metadata"] = {
-            "telegram_context": {
+        telegram_context = {
                 "chat_id": pending_review.original_chat_id,
                 "message_id": pending_review.original_message_id,
                 "user_id": pending_review.requester_id,
-                "url": pending_review.url,
                 "moderated_request": True,
-            }
         }
+        enhanced_job_data["metadata"] = {"telegram_context": telegram_context}
 
         console.print(f"[blue]Queueing dump job {job.job_id} with metadata...[/blue]")
         job_id = await message_queue.queue_dump_job_with_metadata(enhanced_job_data)
@@ -551,24 +597,42 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         console.print(f"[green]Sending acceptance message via command to user: {user_message}[/green]")
         console.print(f"[blue]Chat ID: {pending_review.original_chat_id}, Message ID: {pending_review.original_message_id}[/blue]")
 
-        await message_queue.send_cross_chat(
-            chat_id=pending_review.original_chat_id,
-            text=user_message,
-            reply_to_message_id=pending_review.original_message_id,
-            reply_to_chat_id=pending_review.original_chat_id,
-            context={"command": "accept", "action": "acceptance_notification", "request_id": request_id}
-        )
+        notification_context = {
+            "command": "accept",
+            "action": "acceptance_notification",
+            "request_id": request_id,
+        }
+        if use_privdump:
+            await message_queue.send_reply(
+                chat_id=pending_review.original_chat_id,
+                text=user_message,
+                context=notification_context,
+            )
+        else:
+            await message_queue.send_cross_chat(
+                chat_id=pending_review.original_chat_id,
+                text=user_message,
+                reply_to_message_id=pending_review.original_message_id,
+                reply_to_chat_id=pending_review.original_chat_id,
+                context=notification_context,
+            )
 
         console.print("[green]Acceptance message via command sent successfully[/green]")
         await _cleanup_request(context, request_id)
 
     except Exception as e:
-        console.print(f"[red]Error processing acceptance: {e}[/red]")
-        console.print_exception()
+        safe_error = (
+            redact_for_job(e, dump_args)
+            if use_privdump and "dump_args" in locals()
+            else redact_urls(e, private=use_privdump)
+        )
+        console.print(f"[red]Error processing acceptance: {safe_error}[/red]")
+        if not use_privdump:
+            console.print_exception()
         await message_queue.send_error(
             chat_id=chat.id,
-            text=f" Error processing request {request_id}: {str(e)}",
-            context={"command": "accept", "error": "processing_exception", "request_id": request_id, "exception": str(e)}
+            text=f" Error processing request {request_id}: {safe_error}",
+            context={"command": "accept", "error": "processing_exception", "request_id": request_id}
         )
 
 

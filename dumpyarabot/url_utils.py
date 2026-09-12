@@ -6,8 +6,27 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
-
 HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+
+
+def parse_dump_tokens(tokens: list[str]) -> tuple[list[str], str]:
+    """Split ordered firmware URLs from one optional final option token."""
+    if not tokens:
+        raise ValueError("At least one firmware URL is required")
+
+    option_token = ""
+    candidate = tokens[-1]
+    if (
+        candidate
+        and set(candidate) <= {"a", "f", "p"}
+        and len(set(candidate)) == len(candidate)
+    ):
+        option_token = candidate
+        tokens = tokens[:-1]
+
+    if not tokens:
+        raise ValueError("At least one firmware URL is required")
+    return tokens, option_token
 
 
 async def validate_and_normalize_url(url_str: str) -> Tuple[bool, Optional[str], Optional[str]]:

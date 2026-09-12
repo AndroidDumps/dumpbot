@@ -5,6 +5,7 @@ that integrates with the existing Redis configuration.
 """
 
 import json
+import logging
 import os
 import shutil
 import signal as _signal
@@ -29,9 +30,36 @@ from arq.constants import (
 from rich.console import Console
 
 from dumpyarabot.config import settings
+from dumpyarabot.privacy import redact_urls
 from dumpyarabot.schemas import JobCancelResult
 
 console = Console()
+
+
+class _RedactArqArguments(logging.Filter):
+    """Prevent persisted firmware URLs from appearing in ARQ argument logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_urls(str(value), private=True)
+                if isinstance(value, (str, Exception))
+                else value
+                for value in record.args
+            )
+        elif isinstance(record.args, dict):
+            record.args = {
+                key: redact_urls(str(value), private=True)
+                if isinstance(value, (str, Exception))
+                else value
+                for key, value in record.args.items()
+            }
+        if isinstance(record.msg, str):
+            record.msg = redact_urls(record.msg, private=True)
+        return True
+
+
+logging.getLogger("arq.worker").addFilter(_RedactArqArguments())
 
 
 def get_redis_settings():
