@@ -59,6 +59,9 @@ class NativeExtractionCancelled(JobCancelledError):
 
 CancellationCheck = Callable[[], Awaitable[bool]]
 ANDROID_SPARSE_MAGIC = b"\x3a\xff\x26\xed"
+# Keep archive probing bounded while allowing current multi-gigabyte OTAs.
+MAX_ARCHIVE_MEMBER_SIZE = 32 * 1024**3
+MAX_ARCHIVE_EXPANDED_SIZE = 128 * 1024**3
 
 
 async def _check_cancelled(cancellation_check: CancellationCheck | None) -> bool:
@@ -189,6 +192,15 @@ def _archive_member_needs_preparation(path: PurePosixPath) -> bool:
     )
 
 
+def _check_archive_size(size: int, expanded_size: int) -> int:
+    if size < 0 or size > MAX_ARCHIVE_MEMBER_SIZE:
+        raise ValueError("Archive image member exceeds the allowed size")
+    expanded_size += size
+    if expanded_size > MAX_ARCHIVE_EXPANDED_SIZE:
+        raise ValueError("Archive images exceed the allowed expanded size")
+    return expanded_size
+
+
 def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
     """Validate and flatten regular .img members without shelling out."""
     destination.mkdir(parents=True, exist_ok=False)
@@ -197,6 +209,7 @@ def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
     if zipfile.is_zipfile(archive_path):
         with zipfile.ZipFile(archive_path) as archive:
             zip_image_members: list[zipfile.ZipInfo] = []
+            expanded_size = 0
             for info in archive.infolist():
                 member_path = _safe_archive_member(info.filename)
                 mode = info.external_attr >> 16
@@ -210,6 +223,7 @@ def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
                 if info.is_dir():
                     continue
                 if member_path.suffix.lower() == ".img":
+                    expanded_size = _check_archive_size(info.file_size, expanded_size)
                     key = member_path.name.casefold()
                     if key in seen:
                         raise ValueError(
@@ -225,6 +239,7 @@ def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
     elif tarfile.is_tarfile(archive_path):
         with tarfile.open(archive_path, mode="r:*") as archive:
             tar_image_members: list[tarfile.TarInfo] = []
+            expanded_size = 0
             for member in archive.getmembers():
                 member_path = _safe_archive_member(member.name)
                 if member.isdir():
@@ -232,6 +247,7 @@ def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
                 if not member.isreg():
                     raise ValueError("Archive contains a link or special file")
                 if member_path.suffix.lower() == ".img":
+                    expanded_size = _check_archive_size(member.size, expanded_size)
                     key = member_path.name.casefold()
                     if key in seen:
                         raise ValueError(
@@ -250,6 +266,7 @@ def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
     elif archive_path.name.lower().endswith(".7z"):
         with py7zr.SevenZipFile(archive_path, mode="r") as archive:
             image_names: list[str] = []
+            expanded_size = 0
             for info in archive.list():
                 member_path = _safe_archive_member(info.filename)
                 if info.is_directory:
@@ -257,6 +274,7 @@ def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
                 if info.is_symlink or not info.is_file:
                     raise ValueError("Archive contains a link or special file")
                 if member_path.suffix.lower() == ".img":
+                    expanded_size = _check_archive_size(info.uncompressed, expanded_size)
                     key = member_path.name.casefold()
                     if key in seen:
                         raise ValueError(
@@ -299,6 +317,7 @@ class FirmwareExtractor:
             with zipfile.ZipFile(path) as archive:
                 zip_image_files: list[zipfile.ZipInfo] = []
                 image_basenames: set[str] = set()
+                expanded_size = 0
                 for info in archive.infolist():
                     member_path = _safe_archive_member(info.filename)
                     mode = info.external_attr >> 16
@@ -314,6 +333,7 @@ class FirmwareExtractor:
                     if _archive_member_needs_preparation(member_path):
                         return False
                     if member_path.suffix.lower() == ".img":
+                        expanded_size = _check_archive_size(info.file_size, expanded_size)
                         basename = member_path.name.casefold()
                         if basename in image_basenames:
                             return False
@@ -329,6 +349,7 @@ class FirmwareExtractor:
             with tarfile.open(path, mode="r:*") as archive:
                 tar_image_files: list[tarfile.TarInfo] = []
                 image_basenames = set()
+                expanded_size = 0
                 for member in archive.getmembers():
                     member_path = _safe_archive_member(member.name)
                     if member.isdir():
@@ -338,6 +359,7 @@ class FirmwareExtractor:
                     if _archive_member_needs_preparation(member_path):
                         return False
                     if member_path.suffix.lower() == ".img":
+                        expanded_size = _check_archive_size(member.size, expanded_size)
                         basename = member_path.name.casefold()
                         if basename in image_basenames:
                             return False
@@ -356,6 +378,7 @@ class FirmwareExtractor:
             with py7zr.SevenZipFile(path, mode="r") as archive:
                 image_names: list[str] = []
                 image_basenames = set()
+                expanded_size = 0
                 for info in archive.list():
                     member_path = _safe_archive_member(info.filename)
                     if info.is_directory:
@@ -365,6 +388,7 @@ class FirmwareExtractor:
                     if _archive_member_needs_preparation(member_path):
                         return False
                     if member_path.suffix.lower() == ".img":
+                        expanded_size = _check_archive_size(info.uncompressed, expanded_size)
                         basename = member_path.name.casefold()
                         if basename in image_basenames:
                             return False
@@ -500,6 +524,7 @@ class FirmwareExtractor:
         self,
         function: Callable[..., None],
         *args: object,
+        cancellation_check: CancellationCheck | None = None,
         timeout: float = ONE_HOUR,
     ) -> None:
         """Do not let a non-native extraction thread outlive its work directory."""
@@ -507,6 +532,9 @@ class FirmwareExtractor:
         deadline = asyncio.get_running_loop().time() + timeout
         try:
             while not worker.done():
+                if await _check_cancelled(cancellation_check):
+                    await self._drain_task(worker)
+                    raise JobCancelledError("Job was cancelled")
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     await self._drain_task(worker)
@@ -557,7 +585,10 @@ class FirmwareExtractor:
                 )
             if base_is_raw:
                 await self._run_blocking_and_drain(
-                    _unpack_raw_image_archive, base_path, source_dir
+                    _unpack_raw_image_archive,
+                    base_path,
+                    source_dir,
+                    cancellation_check=cancellation_check,
                 )
             elif self._zip_contains_payload(str(base_path)):
                 source_dir.mkdir()
@@ -585,7 +616,10 @@ class FirmwareExtractor:
                 # A payload may omit unchanged partitions. Copy their bytes into
                 # the completed next stage; never hardlink or mutate source images.
                 await self._run_blocking_and_drain(
-                    _carry_forward_omitted_images, current_stage, next_stage
+                    _carry_forward_omitted_images,
+                    current_stage,
+                    next_stage,
+                    cancellation_check=cancellation_check,
                 )
                 shutil.rmtree(current_stage)
                 current_stage = next_stage
@@ -594,7 +628,10 @@ class FirmwareExtractor:
                 raise JobCancelledError("Job was cancelled")
 
             await self._run_blocking_and_drain(
-                _run_dumpyara_images, current_stage, self.work_dir
+                _run_dumpyara_images,
+                current_stage,
+                self.work_dir,
+                cancellation_check=cancellation_check,
             )
             return str(self.work_dir)
         finally:

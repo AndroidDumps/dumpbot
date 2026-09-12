@@ -599,13 +599,11 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 # Use periodic timer for extraction operation
                 async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 52.0}):
-                    base_is_raw = await extractor.classify_raw_image_archive(
-                        downloaded_paths[0],
-                        cancellation_check=lambda: arq_pool.is_job_cancel_requested(job_id),
-                    )
-                    if dump_job.dump_args.delta_urls or (
-                        base_is_raw and not dump_job.dump_args.use_alt_dumper
-                    ):
+                    if dump_job.dump_args.delta_urls:
+                        base_is_raw = await extractor.classify_raw_image_archive(
+                            downloaded_paths[0],
+                            cancellation_check=lambda: arq_pool.is_job_cancel_requested(job_id),
+                        )
                         await extractor.extract_reconstructed_firmware(
                             dump_job,
                             downloaded_paths,
@@ -613,6 +611,8 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                             base_is_raw=base_is_raw,
                         )
                     else:
+                        # Keep legacy single-input extraction unchanged. Raw
+                        # archive classification is only meaningful for chains.
                         await extractor.extract_firmware(dump_job, downloaded_paths[0])
 
                 # Input directories live under the publication root. Remove the
