@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from dumpyarabot.privacy import redact_for_job, sanitize_url
 from dumpyarabot.utils import escape_markdown
 
 if TYPE_CHECKING:
     from dumpyarabot.aria2_manager import DownloadProgress
+    from dumpyarabot.schemas import DumpJob
 
 
 async def get_arq_start_time(arq_job_id: str) -> Optional[str]:
@@ -208,7 +210,7 @@ def calculate_elapsed_time(
         return "0s"
 
 
-def format_url_display(url: str, max_length: int = 60) -> str:
+def format_url_display(url: Any, max_length: int = 60) -> str:
     """
     Format URL for display, truncating if too long.
 
@@ -219,7 +221,7 @@ def format_url_display(url: str, max_length: int = 60) -> str:
     Returns:
         Formatted URL string
     """
-    url_str = str(url)
+    url_str = sanitize_url(url)
     if len(url_str) > max_length:
         return url_str[:max_length - 3] + "..."
     return url_str
@@ -250,6 +252,21 @@ def format_dump_options(dump_args: Dict[str, Any], add_blacklist: bool = False) 
     return options
 
 
+def format_firmware_inputs(dump_args: Dict[str, Any]) -> str:
+    """Format the persistence-compatible base URL and ordered delta list."""
+    if dump_args.get("use_privdump"):
+        return " *URL:* `[hidden for private dump]`\n"
+
+    base = format_url_display(dump_args["url"])
+    lines = [f" *Base URL:* `{base}`"]
+    delta_urls = dump_args.get("delta_urls") or []
+    if delta_urls:
+        lines.append(f" *Delta OTAs ({len(delta_urls)}), in order:*")
+        for index, url in enumerate(delta_urls, start=1):
+            lines.append(f"   {index}. `{format_url_display(url)}`")
+    return "\n".join(lines) + "\n"
+
+
 async def format_comprehensive_progress_message(
     job_data: Dict[str, Any],
     current_step: str,
@@ -268,6 +285,8 @@ async def format_comprehensive_progress_message(
     Returns:
         Formatted progress message
     """
+    current_step = redact_for_job(current_step, job_data)
+
     # Generate progress bar
     progress_bar = generate_progress_bar(progress)
 
@@ -299,11 +318,7 @@ async def format_comprehensive_progress_message(
 
     # Build message
     message = f" *{status_text}*\n\n"
-    if job_data["dump_args"].get("use_privdump"):
-        message += " *URL:* `[hidden for private dump]`\n"
-    else:
-        url_display = format_url_display(job_data["dump_args"]["url"])
-        message += f" *URL:* `{url_display}`\n"
+    message += format_firmware_inputs(job_data["dump_args"])
     message += f"*Job ID:* `{job_id_display}`\n"
 
     # Format options
@@ -355,9 +370,11 @@ async def format_comprehensive_progress_message(
     # Keep failure edits concise; detailed errors are sent as an attached log file.
     if progress and progress.get("error_message") and metadata and metadata.get("error_context"):
         error_ctx = metadata["error_context"]
-        message += f"\n *Failed at:* {escape_markdown(error_ctx.get('current_step', 'Unknown step'))}\n"
+        failed_at = redact_for_job(error_ctx.get('current_step', 'Unknown step'), job_data)
+        message += f"\n *Failed at:* {escape_markdown(failed_at)}\n"
         if error_ctx.get("last_successful_step"):
-            message += f" *Last successful:* {escape_markdown(error_ctx['last_successful_step'])}\n"
+            last_successful = redact_for_job(error_ctx["last_successful_step"], job_data)
+            message += f" *Last successful:* {escape_markdown(last_successful)}\n"
 
     return message
 
@@ -545,7 +562,6 @@ def format_status_update_message(
 async def format_enhanced_job_status(job: "DumpJob") -> str:
     """Format detailed job status using ARQ metadata."""
     metadata = job.metadata.model_dump() if job.metadata else {}
-
     text = f" *Job Details: {escape_markdown(job.job_id)}*\n\n"
     text += f" *Status:* {job.status.value.title()}\n"
 
@@ -564,13 +580,16 @@ async def format_enhanced_job_status(job: "DumpJob") -> str:
     # Progress info
     if job.progress:
         text += f" *Progress:* {job.progress.percentage:.1f}%\n"
-        text += f" *Current Step:* {job.progress.current_step}\n"
+        current_step = redact_for_job(job.progress.current_step, job)
+        text += f" *Current Step:* {current_step}\n"
 
     # Error details
     if metadata.get("error_context"):
         error = metadata["error_context"]
-        text += f" *Error:* {escape_markdown(error.get('message', 'Unknown error'))}\n"
-        text += f" *Failed at:* {error.get('current_step', 'Unknown step')}\n"
+        error_message = redact_for_job(error.get('message', 'Unknown error'), job)
+        failed_at = redact_for_job(error.get('current_step', 'Unknown step'), job)
+        text += f" *Error:* {escape_markdown(error_message)}\n"
+        text += f" *Failed at:* {failed_at}\n"
 
     # Timing
     if job.started_at:
@@ -592,15 +611,18 @@ async def format_jobs_overview(active_jobs: List["DumpJob"], recent_jobs: List["
     if active_jobs:
         text += f" *Active Jobs ({len(active_jobs)}):*\n"
         for job in active_jobs[:5]:  # Limit display
-            metadata = job.metadata.model_dump() if job.metadata else {}
-            url = metadata.get("telegram_context", {}).get("url", "Unknown URL")
+            if job.dump_args.use_privdump:
+                input_summary = "[hidden for private dump]"
+            else:
+                input_summary = format_url_display(job.dump_args.url, max_length=50)
+                if job.dump_args.delta_urls:
+                    input_summary += f" + {len(job.dump_args.delta_urls)} ordered delta(s)"
 
             status = job.progress.current_step if job.progress else "Initializing"
+            status = redact_for_job(status, job)
             percentage = job.progress.percentage if job.progress else 0
 
-            # Truncate URL for display
-            short_url = url[:50] + "..." if len(url) > 50 else url
-            text += f"• `{job.job_id}` - {escape_markdown(short_url)}\n"
+            text += f"• `{job.job_id}` - {escape_markdown(input_summary)}\n"
             text += f"  └─ {status} ({percentage:.1f}%)\n"
         text += "\n"
     else:

@@ -7,20 +7,29 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from telegram import InlineKeyboardMarkup
 
-from dumpyarabot.config import (CALLBACK_ACCEPT, CALLBACK_CANCEL_REQUEST,
-                                CALLBACK_REJECT,
-                                CALLBACK_RESTART_CANCEL, CALLBACK_RESTART_CONFIRM,
-                                CALLBACK_SUBMIT_ACCEPTANCE, CALLBACK_TOGGLE_ALT,
-                                CALLBACK_TOGGLE_FORCE, CALLBACK_TOGGLE_PRIVDUMP)
-from dumpyarabot.schemas import AcceptOptionsState, MockupState, PendingReview
-from dumpyarabot.storage import ReviewStorage
-from dumpyarabot.ui import (REVIEW_TEMPLATE, create_options_keyboard,
-                            create_review_keyboard)
-from dumpyarabot.utils import generate_request_id
-from dumpyarabot.config import settings
-
 # Import main handlers to avoid duplication
 from dumpyarabot import moderated_handlers
+from dumpyarabot.config import (
+    CALLBACK_ACCEPT,
+    CALLBACK_CANCEL_REQUEST,
+    CALLBACK_REJECT,
+    CALLBACK_RESTART_CANCEL,
+    CALLBACK_RESTART_CONFIRM,
+    CALLBACK_SUBMIT_ACCEPTANCE,
+    CALLBACK_TOGGLE_ALT,
+    CALLBACK_TOGGLE_FORCE,
+    CALLBACK_TOGGLE_PRIVDUMP,
+    settings,
+)
+from dumpyarabot.privacy import sanitize_url
+from dumpyarabot.schemas import AcceptOptionsState, MockupState, PendingReview
+from dumpyarabot.storage import ReviewStorage
+from dumpyarabot.ui import (
+    REVIEW_TEMPLATE,
+    create_options_keyboard,
+    create_review_keyboard,
+)
+from dumpyarabot.utils import generate_request_id
 
 # Mockup-specific callback prefixes for reset/back/delete functionality
 CALLBACK_MOCKUP_RESET = "mockup_reset_"
@@ -651,8 +660,14 @@ async def _handle_submit_callback_with_mockup_state(
             "\n".join(options_summary) if options_summary else "No special options selected"
         )
 
+        input_text = (
+            "URL: [hidden for private dump]"
+            if options_state.privdump
+            else f"Base URL: {sanitize_url(pending_review.url)}\nDelta OTAs: {len(pending_review.delta_urls)}"
+        )
         await query.edit_message_text(
-            text=f" Request {request_id} accepted and dumpyara job triggered\n\nSelected options:\n{options_text}\n\nURL: {pending_review.url}"
+            text=f" Request {request_id} accepted and dumpyara job triggered\n\n"
+            f"Selected options:\n{options_text}\n\n{input_text}"
         )
     else:
         # For real requests, delegate to main handler
@@ -690,5 +705,3 @@ async def _handle_cancel_callback_with_mockup_state(
     else:
         # For real requests, delegate to main handler
         await moderated_handlers._handle_cancel_callback(query, context, callback_data)
-
-

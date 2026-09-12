@@ -68,6 +68,38 @@ class RedisStorage:
         await redis_client.set(key, review.model_dump_json(), ex=ttl)
 
     @classmethod
+    async def update_pending_review(cls, review: PendingReview) -> None:
+        """Update a pending review without extending its existing TTL."""
+        _validate_request_id(review.request_id)
+        redis_client = await cls.get_redis_client()
+        key = cls._make_key(f"pending_reviews:{review.request_id}")
+        updated = await redis_client.set(
+            key,
+            review.model_dump_json(),
+            xx=True,
+            keepttl=True,
+        )
+        if not updated:
+            raise ValueError("Pending review no longer exists")
+
+    @classmethod
+    async def store_pending_review_with_options(
+        cls,
+        review: PendingReview,
+        options: AcceptOptionsState,
+        ttl: int = 604800,
+    ) -> None:
+        """Atomically store a pending review and its initial options."""
+        _validate_request_id(review.request_id)
+        redis_client = await cls.get_redis_client()
+        review_key = cls._make_key(f"pending_reviews:{review.request_id}")
+        options_key = cls._make_key(f"options_states:{review.request_id}")
+        async with redis_client.pipeline(transaction=True) as pipeline:
+            pipeline.set(review_key, review.model_dump_json(), ex=ttl)
+            pipeline.set(options_key, options.model_dump_json(), ex=ttl)
+            await pipeline.execute()
+
+    @classmethod
     async def remove_pending_review(cls, request_id: str) -> bool:
         """Remove a pending review. Returns True if removed, False if not found."""
         _validate_request_id(request_id)
@@ -213,6 +245,23 @@ class ReviewStorage:
     ) -> None:
         """Store a pending review."""
         await RedisStorage.store_pending_review(review)
+
+    @staticmethod
+    async def update_pending_review(
+        context: ContextTypes.DEFAULT_TYPE,
+        review: PendingReview,
+    ) -> None:
+        """Update a pending review without extending its expiry."""
+        await RedisStorage.update_pending_review(review)
+
+    @staticmethod
+    async def store_pending_review_with_options(
+        context: ContextTypes.DEFAULT_TYPE,
+        review: PendingReview,
+        options: AcceptOptionsState,
+    ) -> None:
+        """Store a pending review and its initial options atomically."""
+        await RedisStorage.store_pending_review_with_options(review, options)
 
     @staticmethod
     async def remove_pending_review(

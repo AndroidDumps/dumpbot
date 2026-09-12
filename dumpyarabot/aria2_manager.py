@@ -5,13 +5,17 @@ import os
 import socket
 import subprocess
 from collections import deque
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import AsyncIterator
 
 import aria2p
 from rich.console import Console
-from dumpyarabot.process_utils import _register_process_for_current_job, _unregister_process_for_current_job
+
+from dumpyarabot.process_utils import (
+    _register_process_for_current_job,
+    _unregister_process_for_current_job,
+)
 
 console = Console()
 
@@ -103,10 +107,17 @@ def _find_free_port() -> int:
 class Aria2Manager:
     """Manages an aria2c daemon and provides RPC-based download with progress tracking."""
 
-    def __init__(self, download_dir: str, split: int = 16, max_connection_per_server: int = 16):
+    def __init__(
+        self,
+        download_dir: str,
+        split: int = 16,
+        max_connection_per_server: int = 16,
+        log_download_names: bool = True,
+    ):
         self.download_dir = Path(download_dir)
         self.split = split
         self.max_connection_per_server = max_connection_per_server
+        self.log_download_names = log_download_names
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._stderr_lines: deque[str] = deque(maxlen=50)
@@ -255,7 +266,8 @@ class Aria2Manager:
             raise RuntimeError(f"Failed to add download for: {url}")
 
         gid = download.gid
-        console.print(f"[blue]Download added (gid={gid}): {url}[/blue]")
+        if self.log_download_names:
+            console.print(f"[blue]Download added (gid={gid}): {url}[/blue]")
 
         elapsed = 0.0
         try:
@@ -283,7 +295,8 @@ class Aria2Manager:
                 yield progress
 
                 if progress.is_complete:
-                    console.print(f"[green]Download complete: {file_name}[/green]")
+                    if self.log_download_names:
+                        console.print(f"[green]Download complete: {file_name}[/green]")
                     return
 
                 if progress.is_error:

@@ -6,7 +6,7 @@ import os
 import signal
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -406,6 +406,7 @@ async def run_download_command(
     cwd: Optional[Union[str, Path]] = None,
     timeout: float = 600.0,
     description: Optional[str] = None,
+    quiet: bool = False,
 ) -> ProcessResult:
     """Run a download command with standard settings."""
     return await run_command(
@@ -414,6 +415,7 @@ async def run_download_command(
         timeout=timeout,
         capture_output=True,
         check=False,  # Allow handling download failures gracefully
+        quiet=quiet,
         description=description or f"Download with {tool}",
     )
 

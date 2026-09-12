@@ -7,13 +7,14 @@ from telegram import Chat, Message, Update
 from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
-from dumpyarabot import schemas, utils, url_utils
-from dumpyarabot.utils import escape_markdown
-from dumpyarabot.config import settings
+from dumpyarabot import schemas, url_utils, utils
 from dumpyarabot.auth import VERIFICATION_FAILED_MESSAGE, check_admin_permissions
+from dumpyarabot.config import settings
+from dumpyarabot.message_formatting import format_firmware_inputs, generate_progress_bar
 from dumpyarabot.message_queue import message_queue
-from dumpyarabot.message_formatting import generate_progress_bar
+from dumpyarabot.privacy import redact_for_job, redact_urls, sanitize_url
 from dumpyarabot.schemas import JobCancelResult
+from dumpyarabot.utils import escape_markdown
 
 console = Console()
 
@@ -80,6 +81,12 @@ async def dump(
         console.print("[red]Chat or message object is None[/red]")
         return
 
+    if chat.id == settings.REQUEST_CHAT_ID:
+        from dumpyarabot.moderated_handlers import handle_moderated_dump
+
+        await handle_moderated_dump(update, context)
+        return
+
     # Ensure it can only be used in the correct group
     if chat.id not in settings.ALLOWED_CHATS:
         # Do nothing
@@ -88,7 +95,7 @@ async def dump(
     # Ensure that we had some arguments passed
     if not context.args:
         console.print("[yellow]No arguments provided for dump command[/yellow]")
-        usage = "Usage: `/dump [URL] [a|f|p]`\nURL: required, a: alt dumper, f: force, p: use privdump"
+        usage = "Usage: `/dump BASE [DELTA ...] [a|f|p]`\nAt least one URL is required; a: alt dumper, f: force, p: use privdump"
         await message_queue.send_reply(
             chat_id=chat.id,
             text=usage,
@@ -97,15 +104,25 @@ async def dump(
         )
         return
 
-    url = context.args[0]
-    options = "".join("".join(context.args[1:]).split())
+    try:
+        ordered_urls, options = url_utils.parse_dump_tokens(list(context.args))
+    except ValueError as e:
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text=str(e),
+            reply_to_message_id=message.message_id,
+            context={"command": "dump", "error": "missing_urls"},
+        )
+        return
 
     use_alt_dumper = "a" in options
     force = "f" in options
     use_privdump = "p" in options
 
     console.print("[green]Dump request:[/green]")
-    console.print(f"  URL: {url}")
+    if not use_privdump:
+        console.print(f"  Base URL: {sanitize_url(ordered_urls[0])}")
+        console.print(f"  Delta URLs: {len(ordered_urls) - 1}")
     console.print(f"  Alt dumper: {use_alt_dumper}")
     console.print(f"  Force: {force}")
     console.print(f"  Privdump: {use_privdump}")
@@ -123,17 +140,23 @@ async def dump(
                 "[green]Successfully deleted original message for privdump[/green]"
             )
         except Exception as e:
-            console.print(f"[red]Failed to delete message for privdump: {e}[/red]")
+            console.print(
+                f"[red]Failed to delete message for privdump: "
+                f"{redact_urls(e, private=True)}[/red]"
+            )
 
     # Try to validate args and queue dump job
     try:
-        # Validate URL using new utility
-        is_valid, normalized_url, error_msg = await url_utils.validate_and_normalize_url(url)
-        if not is_valid:
-            raise ValueError(error_msg)
+        normalized_urls = []
+        for candidate in ordered_urls:
+            is_valid, normalized_url, error_msg = await url_utils.validate_and_normalize_url(candidate)
+            if not is_valid or normalized_url is None:
+                raise ValueError(error_msg)
+            normalized_urls.append(normalized_url)
 
         dump_args = schemas.DumpArguments(
-            url=normalized_url,
+            url=normalized_urls[0],
+            delta_urls=normalized_urls[1:],
             use_alt_dumper=use_alt_dumper,
             force=force,
             use_privdump=use_privdump,
@@ -154,7 +177,8 @@ async def dump(
         if use_privdump:
             initial_text = " *Private Dump Job Queued*\n\n"
         else:
-            initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
+            initial_text = " *Firmware Dump Queued*\n\n"
+            initial_text += format_firmware_inputs(dump_args.model_dump())
 
         initial_text += f"*Job ID:* `{job.job_id}`\n"
 
@@ -202,14 +226,12 @@ async def dump(
         enhanced_job_data = job.model_dump()
         # Store initial text so the worker can re-edit it during Telegram context verification
         enhanced_job_data["_queued_text"] = initial_text
-        enhanced_job_data["metadata"] = {
-            "telegram_context": {
+        telegram_context = {
                 "chat_id": chat.id,
                 "message_id": initial_message_id,
                 "user_id": message.from_user.id if message.from_user else 0,
-                "url": normalized_url
-            }
         }
+        enhanced_job_data["metadata"] = {"telegram_context": telegram_context}
 
         # Queue the job with enhanced data
         job_id = await message_queue.queue_dump_job_with_metadata(enhanced_job_data)
@@ -217,21 +239,34 @@ async def dump(
         console.print(f"[green]Dump job {job_id} queued with enhanced metadata[/green]")
 
     except ValueError as e:
-        console.print(f"[red]Invalid URL provided: {url} - {e}[/red]")
-        response_text = f" *Invalid URL:* {url}\n\nPlease provide a valid firmware download URL."
+        if use_privdump:
+            console.print("[red]Invalid private firmware URL provided[/red]")
+            response_text = " *Invalid URL*\n\nPlease provide valid firmware download URLs."
+            error_context = {"command": "dump", "error": "validation_error"}
+        else:
+            safe_error = redact_urls(e, private=False)
+            console.print(f"[red]Invalid URL provided: {safe_error}[/red]")
+            response_text = " *Invalid URL*\n\nPlease provide valid firmware download URLs."
+            error_context = {"command": "dump", "error": "validation_error"}
 
         # Send error message as reply
         await message_queue.send_reply(
             chat_id=chat.id,
             text=response_text,
             reply_to_message_id=None if use_privdump else message.message_id,
-            context={"command": "dump", "url": url, "error": "validation_error"}
+            context=error_context,
         )
 
     except Exception as e:
-        console.print(f"[red]Unexpected error occurred: {e}[/red]")
-        console.print_exception()
-        escaped_error = escape_markdown(str(e))
+        safe_error = (
+            redact_for_job(e, dump_args)
+            if use_privdump and "dump_args" in locals()
+            else redact_urls(e, private=use_privdump)
+        )
+        console.print(f"[red]Unexpected error occurred: {safe_error}[/red]")
+        if not use_privdump:
+            console.print_exception()
+        escaped_error = escape_markdown(safe_error)
         response_text = f" *Error occurred:* {escaped_error}\n\nPlease try again or contact an administrator."
 
         # Send error message as reply
@@ -239,7 +274,7 @@ async def dump(
             chat_id=chat.id,
             text=response_text,
             reply_to_message_id=None if use_privdump else message.message_id,
-            context={"command": "dump", "url": url, "error": "unexpected_error"}
+            context={"command": "dump", "error": "unexpected_error"},
         )
 
 
@@ -488,7 +523,8 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Create confirmation keyboard
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    from dumpyarabot.config import CALLBACK_RESTART_CONFIRM, CALLBACK_RESTART_CANCEL
+
+    from dumpyarabot.config import CALLBACK_RESTART_CANCEL, CALLBACK_RESTART_CONFIRM
 
     keyboard = [
         [
@@ -525,7 +561,7 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     }
 
     # Create a custom queued message for restart confirmation
-    from dumpyarabot.message_queue import QueuedMessage, MessageType, MessagePriority
+    from dumpyarabot.message_queue import MessagePriority, MessageType, QueuedMessage
     restart_message = QueuedMessage(
         type=MessageType.NOTIFICATION,
         priority=MessagePriority.URGENT,
@@ -601,7 +637,7 @@ async def handle_restart_callback(update: Update, context: ContextTypes.DEFAULT_
 
     await query.answer()
 
-    from dumpyarabot.config import CALLBACK_RESTART_CONFIRM, CALLBACK_RESTART_CANCEL
+    from dumpyarabot.config import CALLBACK_RESTART_CANCEL, CALLBACK_RESTART_CONFIRM
 
     if query.data.startswith(CALLBACK_RESTART_CONFIRM):
         # Extract user ID from callback data

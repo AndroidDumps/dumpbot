@@ -1,8 +1,20 @@
 import asyncio
-from pathlib import Path
+import re
+import shutil
+import stat
+import tarfile
+import zipfile
+from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path, PurePosixPath
+from typing import Any
 
+import otadump
+import py7zr
 from dumpyara.dumpyara import dumpyara
+from dumpyara.steps.extract_images import extract_images as dumpyara_extract_images
 from dumpyara.utils import multipartitions as dumpyara_multipartitions
+from dumpyara.utils.partitions import get_partition_names
+from py7zr.io import Py7zIO, WriterFactory
 from rich.console import Console
 
 from dumpyarabot.file_utils import (
@@ -25,7 +37,269 @@ console = Console()
 def _run_dumpyara(firmware_path: Path, output_path: Path) -> None:
     """Run Dumpyara with its reliable in-process payload parser."""
     dumpyara_multipartitions.OTADUMP_EXECUTABLE = None
+    dumpyara_multipartitions.extract_payload_native = None
     dumpyara(firmware_path, output_path)
+
+
+def _run_dumpyara_images(images_path: Path, output_path: Path) -> None:
+    """Run dumpyara's existing filesystem-image extraction step once."""
+    dumpyara_extract_images(images_path, output_path)
+    system_path = output_path / "system"
+    if not system_path.exists() or not any(system_path.iterdir()):
+        raise RuntimeError("System filesystem extraction did not produce files")
+
+
+class JobCancelledError(Exception):
+    """Raised after cooperative native extraction has fully stopped."""
+
+
+class NativeExtractionCancelled(JobCancelledError):
+    """Internal form of otadump's cooperative KeyboardInterrupt."""
+
+
+CancellationCheck = Callable[[], Awaitable[bool]]
+ANDROID_SPARSE_MAGIC = b"\x3a\xff\x26\xed"
+# Keep archive probing bounded while allowing current multi-gigabyte OTAs.
+MAX_ARCHIVE_MEMBER_SIZE = 32 * 1024**3
+MAX_ARCHIVE_EXPANDED_SIZE = 128 * 1024**3
+
+
+async def _check_cancelled(cancellation_check: CancellationCheck | None) -> bool:
+    """Safely poll cooperative cancellation without failing on callback errors."""
+    if cancellation_check is None:
+        return False
+    try:
+        return await cancellation_check()
+    except Exception as e:
+        console.print(f"[yellow]Cancellation check error (ignored): {e}[/yellow]")
+        return False
+
+
+class _ArchiveImageIO(Py7zIO):
+    def __init__(self, path: Path):
+        self._file = path.open("x+b")
+
+    def write(self, data: bytes | bytearray) -> int:
+        return self._file.write(data)
+
+    def read(self, size: int | None = None) -> bytes:
+        return self._file.read(-1 if size is None else size)
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._file.seek(offset, whence)
+
+    def flush(self) -> None:
+        self._file.flush()
+
+    def size(self) -> int:
+        position = self._file.tell()
+        self._file.seek(0, 2)
+        size = self._file.tell()
+        self._file.seek(position)
+        return size
+
+    def close(self) -> None:
+        self._file.close()
+
+
+class _ArchiveImageFactory(WriterFactory):
+    def __init__(self, destination: Path):
+        self.destination = destination
+
+    def create(self, filename: str) -> Py7zIO:
+        name = _safe_archive_member(filename).name
+        return _ArchiveImageIO(self.destination / name)
+
+
+class _ImageMagicIO(Py7zIO):
+    def __init__(self):
+        self.magic = bytearray()
+        self.position = 0
+
+    def write(self, data: bytes | bytearray) -> int:
+        if len(self.magic) < 4:
+            self.magic.extend(data[: 4 - len(self.magic)])
+        self.position += len(data)
+        return len(data)
+
+    def read(self, size: int | None = None) -> bytes:
+        return b""
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 0:
+            self.position = offset
+        elif whence == 1:
+            self.position += offset
+        return self.position
+
+    def flush(self) -> None:
+        return None
+
+    def size(self) -> int:
+        return self.position
+
+
+class _ImageMagicFactory(WriterFactory):
+    def __init__(self):
+        self.outputs: list[_ImageMagicIO] = []
+
+    def create(self, filename: str) -> Py7zIO:
+        output = _ImageMagicIO()
+        self.outputs.append(output)
+        return output
+
+
+def _safe_archive_member(name: str) -> PurePosixPath:
+    normalized = name.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:", normalized)
+        or path.is_absolute()
+        or ".." in path.parts
+    ):
+        raise ValueError("Archive contains an unsafe path")
+    return path
+
+
+def _raw_image_names_are_ready(names: Sequence[str]) -> bool:
+    """Exclude containers and slot layouts that need dumpyara preparation."""
+    stems = [PurePosixPath(name.replace("\\", "/")).stem for name in names]
+    if not stems or any(
+        stem == "super" or stem.endswith(("_a", "_b")) for stem in stems
+    ):
+        return False
+    supported_partitions = set(get_partition_names())
+    return any(stem in supported_partitions for stem in stems)
+
+
+def _archive_member_needs_preparation(path: PurePosixPath) -> bool:
+    """Keep known Android partition containers on the legacy extraction path."""
+    name = path.name.lower()
+    return name == "payload.bin" or name.endswith(
+        (
+            ".new.dat",
+            ".new.dat.br",
+            ".patch.dat",
+            ".transfer.list",
+            ".img.br",
+            ".img.gz",
+            ".img.lz4",
+            ".img.xz",
+            ".img.zst",
+        )
+    )
+
+
+def _check_archive_size(size: int, expanded_size: int) -> int:
+    if size < 0 or size > MAX_ARCHIVE_MEMBER_SIZE:
+        raise ValueError("Archive image member exceeds the allowed size")
+    expanded_size += size
+    if expanded_size > MAX_ARCHIVE_EXPANDED_SIZE:
+        raise ValueError("Archive images exceed the allowed expanded size")
+    return expanded_size
+
+
+def _unpack_raw_image_archive(archive_path: Path, destination: Path) -> None:
+    """Validate and flatten regular .img members without shelling out."""
+    destination.mkdir(parents=True, exist_ok=False)
+    seen: set[str] = set()
+
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path) as archive:
+            zip_image_members: list[zipfile.ZipInfo] = []
+            expanded_size = 0
+            for info in archive.infolist():
+                member_path = _safe_archive_member(info.filename)
+                mode = info.external_attr >> 16
+                file_type = stat.S_IFMT(mode)
+                if stat.S_ISLNK(mode) or file_type not in {
+                    0,
+                    stat.S_IFREG,
+                    stat.S_IFDIR,
+                }:
+                    raise ValueError("Archive contains a link or special file")
+                if info.is_dir():
+                    continue
+                if member_path.suffix.lower() == ".img":
+                    expanded_size = _check_archive_size(info.file_size, expanded_size)
+                    key = member_path.name.casefold()
+                    if key in seen:
+                        raise ValueError(
+                            f"Archive contains duplicate partition image basename: {member_path.name}"
+                        )
+                    seen.add(key)
+                    zip_image_members.append(info)
+            for info in zip_image_members:
+                name = PurePosixPath(info.filename.replace("\\", "/")).name
+                with archive.open(info) as source, (destination / name).open("xb") as target:
+                    shutil.copyfileobj(source, target)
+
+    elif tarfile.is_tarfile(archive_path):
+        with tarfile.open(archive_path, mode="r:*") as archive:
+            tar_image_members: list[tarfile.TarInfo] = []
+            expanded_size = 0
+            for member in archive.getmembers():
+                member_path = _safe_archive_member(member.name)
+                if member.isdir():
+                    continue
+                if not member.isreg():
+                    raise ValueError("Archive contains a link or special file")
+                if member_path.suffix.lower() == ".img":
+                    expanded_size = _check_archive_size(member.size, expanded_size)
+                    key = member_path.name.casefold()
+                    if key in seen:
+                        raise ValueError(
+                            f"Archive contains duplicate partition image basename: {member_path.name}"
+                        )
+                    seen.add(key)
+                    tar_image_members.append(member)
+            for member in tar_image_members:
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError("Could not read archive image entry")
+                name = PurePosixPath(member.name.replace("\\", "/")).name
+                with extracted, (destination / name).open("xb") as target:
+                    shutil.copyfileobj(extracted, target)
+
+    elif archive_path.name.lower().endswith(".7z"):
+        with py7zr.SevenZipFile(archive_path, mode="r") as archive:
+            image_names: list[str] = []
+            expanded_size = 0
+            for info in archive.list():
+                member_path = _safe_archive_member(info.filename)
+                if info.is_directory:
+                    continue
+                if info.is_symlink or not info.is_file:
+                    raise ValueError("Archive contains a link or special file")
+                if member_path.suffix.lower() == ".img":
+                    expanded_size = _check_archive_size(info.uncompressed, expanded_size)
+                    key = member_path.name.casefold()
+                    if key in seen:
+                        raise ValueError(
+                            f"Archive contains duplicate partition image basename: {member_path.name}"
+                        )
+                    seen.add(key)
+                    image_names.append(info.filename)
+
+            archive.extract(
+                targets=image_names,
+                factory=_ArchiveImageFactory(destination),
+            )
+    else:
+        raise ValueError("Base input is not a supported raw-image archive")
+
+    if not seen:
+        raise ValueError("Raw-image archive contains no .img files")
+
+
+def _carry_forward_omitted_images(current_stage: Path, next_stage: Path) -> None:
+    """Copy unchanged partition bytes into a successfully extracted next stage."""
+    for source_image in current_stage.glob("*.img"):
+        destination = next_stage / source_image.name
+        if not destination.exists():
+            shutil.copy2(source_image, destination)
 
 
 class FirmwareExtractor:
@@ -35,9 +309,340 @@ class FirmwareExtractor:
         self.work_dir = Path(work_dir)
         self.firmware_extractor_path = Path.home() / "Firmware_extractor"
 
+    @staticmethod
+    def is_raw_image_archive(firmware_path: str) -> bool:
+        """Identify extraction-ready raw images while preserving legacy containers."""
+        path = Path(firmware_path)
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as archive:
+                zip_image_files: list[zipfile.ZipInfo] = []
+                image_basenames: set[str] = set()
+                expanded_size = 0
+                for info in archive.infolist():
+                    member_path = _safe_archive_member(info.filename)
+                    mode = info.external_attr >> 16
+                    file_type = stat.S_IFMT(mode)
+                    if stat.S_ISLNK(mode) or file_type not in {
+                        0,
+                        stat.S_IFREG,
+                        stat.S_IFDIR,
+                    }:
+                        return False
+                    if info.is_dir():
+                        continue
+                    if _archive_member_needs_preparation(member_path):
+                        return False
+                    if member_path.suffix.lower() == ".img":
+                        expanded_size = _check_archive_size(info.file_size, expanded_size)
+                        basename = member_path.name.casefold()
+                        if basename in image_basenames:
+                            return False
+                        image_basenames.add(basename)
+                        zip_image_files.append(info)
+                return _raw_image_names_are_ready(
+                    [info.filename for info in zip_image_files]
+                ) and all(
+                    archive.open(info).read(4) != ANDROID_SPARSE_MAGIC
+                    for info in zip_image_files
+                )
+        if tarfile.is_tarfile(path):
+            with tarfile.open(path, mode="r:*") as archive:
+                tar_image_files: list[tarfile.TarInfo] = []
+                image_basenames = set()
+                expanded_size = 0
+                for member in archive.getmembers():
+                    member_path = _safe_archive_member(member.name)
+                    if member.isdir():
+                        continue
+                    if not member.isreg():
+                        return False
+                    if _archive_member_needs_preparation(member_path):
+                        return False
+                    if member_path.suffix.lower() == ".img":
+                        expanded_size = _check_archive_size(member.size, expanded_size)
+                        basename = member_path.name.casefold()
+                        if basename in image_basenames:
+                            return False
+                        image_basenames.add(basename)
+                        tar_image_files.append(member)
+                if not _raw_image_names_are_ready(
+                    [member.name for member in tar_image_files]
+                ):
+                    return False
+                for member in tar_image_files:
+                    extracted = archive.extractfile(member)
+                    if extracted is None or extracted.read(4) == ANDROID_SPARSE_MAGIC:
+                        return False
+                return True
+        if path.name.lower().endswith(".7z"):
+            with py7zr.SevenZipFile(path, mode="r") as archive:
+                image_names: list[str] = []
+                image_basenames = set()
+                expanded_size = 0
+                for info in archive.list():
+                    member_path = _safe_archive_member(info.filename)
+                    if info.is_directory:
+                        continue
+                    if info.is_symlink or not info.is_file:
+                        return False
+                    if _archive_member_needs_preparation(member_path):
+                        return False
+                    if member_path.suffix.lower() == ".img":
+                        expanded_size = _check_archive_size(info.uncompressed, expanded_size)
+                        basename = member_path.name.casefold()
+                        if basename in image_basenames:
+                            return False
+                        image_basenames.add(basename)
+                        image_names.append(info.filename)
+                if not _raw_image_names_are_ready(image_names):
+                    return False
+                magic_factory = _ImageMagicFactory()
+                archive.extract(targets=image_names, factory=magic_factory)
+                return all(
+                    bytes(output.magic) != ANDROID_SPARSE_MAGIC
+                    for output in magic_factory.outputs
+                )
+        return False
+
+    @staticmethod
+    def _zip_contains_payload(firmware_path: str) -> bool:
+        if not zipfile.is_zipfile(firmware_path):
+            return False
+        with zipfile.ZipFile(firmware_path) as archive:
+            return any(
+                PurePosixPath(name.replace("\\", "/")).name == "payload.bin"
+                for name in archive.namelist()
+            )
+
+    async def _drain_task(self, task: asyncio.Task[Any]) -> BaseException | None:
+        """Wait until a shielded worker really exits, despite caller cancellation."""
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                if not task.done():
+                    continue
+                break
+        try:
+            task.result()
+        except BaseException as error:
+            return error
+        return None
+
+    async def classify_raw_image_archive(
+        self,
+        firmware_path: str,
+        *,
+        cancellation_check: CancellationCheck | None = None,
+    ) -> bool:
+        """Classify potentially large archives off-loop and drain on cancellation."""
+        worker = asyncio.create_task(
+            asyncio.to_thread(self.is_raw_image_archive, firmware_path)
+        )
+        try:
+            while not worker.done():
+                if await _check_cancelled(cancellation_check):
+                    await self._drain_task(worker)
+                    raise JobCancelledError("Job was cancelled")
+                await asyncio.wait({worker}, timeout=0.25)
+            error = await self._drain_task(worker)
+            if error:
+                raise error
+            return worker.result()
+        except asyncio.CancelledError:
+            await self._drain_task(worker)
+            raise
+        except BaseException:
+            if not worker.done():
+                await self._drain_task(worker)
+            raise
+
+    async def _run_otadump(
+        self,
+        payload_path: Path,
+        output_dir: Path,
+        *,
+        source_dir: Path | None = None,
+        cancellation_check: CancellationCheck | None = None,
+        timeout: float = ONE_HOUR,
+    ) -> None:
+        """Run one native call with cooperative cancellation and mandatory drain."""
+        token = otadump.CancellationToken()
+
+        def run() -> None:
+            try:
+                otadump.extract(
+                    payload_path,
+                    output_dir,
+                    source_dir=source_dir,
+                    cancellation_token=token,
+                )
+            except KeyboardInterrupt as error:
+                raise NativeExtractionCancelled(
+                    "Native OTA extraction was cancelled"
+                ) from error
+
+        worker = asyncio.create_task(asyncio.to_thread(run))
+        deadline = asyncio.get_running_loop().time() + timeout
+        try:
+            while not worker.done():
+                if await _check_cancelled(cancellation_check):
+                    token.cancel()
+                    await self._drain_task(worker)
+                    raise JobCancelledError("Job was cancelled")
+
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    token.cancel()
+                    await self._drain_task(worker)
+                    raise TimeoutError("Native OTA extraction timed out")
+                await asyncio.wait({worker}, timeout=min(0.25, remaining))
+
+            error = await self._drain_task(worker)
+            if isinstance(error, (NativeExtractionCancelled, JobCancelledError)):
+                raise JobCancelledError("Job was cancelled") from error
+            if error:
+                raise error
+        except asyncio.CancelledError:
+            token.cancel()
+            await self._drain_task(worker)
+            raise
+        except (JobCancelledError, TimeoutError):
+            if not worker.done():
+                token.cancel()
+                await self._drain_task(worker)
+            raise
+        except BaseException:
+            if not worker.done():
+                token.cancel()
+                await self._drain_task(worker)
+            raise
+
+    async def _run_blocking_and_drain(
+        self,
+        function: Callable[..., None],
+        *args: object,
+        cancellation_check: CancellationCheck | None = None,
+        timeout: float = ONE_HOUR,
+    ) -> None:
+        """Do not let a non-native extraction thread outlive its work directory."""
+        worker = asyncio.create_task(asyncio.to_thread(function, *args))
+        deadline = asyncio.get_running_loop().time() + timeout
+        try:
+            while not worker.done():
+                if await _check_cancelled(cancellation_check):
+                    await self._drain_task(worker)
+                    raise JobCancelledError("Job was cancelled")
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    await self._drain_task(worker)
+                    raise TimeoutError("Extraction step timed out")
+                await asyncio.wait({worker}, timeout=min(0.25, remaining))
+
+            error = await self._drain_task(worker)
+            if error:
+                raise error
+        except asyncio.CancelledError:
+            await self._drain_task(worker)
+            raise
+        except TimeoutError:
+            if not worker.done():
+                await self._drain_task(worker)
+            raise
+        except BaseException:
+            if not worker.done():
+                await self._drain_task(worker)
+            raise
+
+    async def extract_reconstructed_firmware(
+        self,
+        job: DumpJob,
+        firmware_paths: Sequence[str],
+        *,
+        cancellation_check: CancellationCheck | None = None,
+        base_is_raw: bool | None = None,
+    ) -> str:
+        """Build ordered final images, then extract filesystems exactly once."""
+        if not firmware_paths:
+            raise ValueError("No firmware inputs were downloaded")
+
+        if job.dump_args.use_alt_dumper:
+            raise ValueError(
+                "Alternative dumper is not supported for delta OTA or raw-image reconstruction"
+            )
+
+        staging_root = self.work_dir / ".ota_staging"
+        shutil.rmtree(staging_root, ignore_errors=True)
+        staging_root.mkdir()
+        try:
+            base_path = Path(firmware_paths[0])
+            source_dir = staging_root / "stage_000"
+            if base_is_raw is None:
+                base_is_raw = await self.classify_raw_image_archive(
+                    str(base_path), cancellation_check=cancellation_check
+                )
+            if base_is_raw:
+                await self._run_blocking_and_drain(
+                    _unpack_raw_image_archive,
+                    base_path,
+                    source_dir,
+                    cancellation_check=cancellation_check,
+                )
+            elif self._zip_contains_payload(str(base_path)):
+                source_dir.mkdir()
+                await self._run_otadump(
+                    base_path,
+                    source_dir,
+                    cancellation_check=cancellation_check,
+                )
+            else:
+                raise ValueError(
+                    "Delta reconstruction requires a full OTA or raw-image archive base"
+                )
+
+            current_stage = source_dir
+            for index, delta_path_value in enumerate(firmware_paths[1:], start=1):
+                next_stage = staging_root / f"stage_{index:03d}"
+                next_stage.mkdir()
+                await self._run_otadump(
+                    Path(delta_path_value),
+                    next_stage,
+                    source_dir=current_stage,
+                    cancellation_check=cancellation_check,
+                )
+
+                # A payload may omit unchanged partitions. Copy their bytes into
+                # the completed next stage; never hardlink or mutate source images.
+                await self._run_blocking_and_drain(
+                    _carry_forward_omitted_images,
+                    current_stage,
+                    next_stage,
+                    cancellation_check=cancellation_check,
+                )
+                shutil.rmtree(current_stage)
+                current_stage = next_stage
+
+            if await _check_cancelled(cancellation_check):
+                raise JobCancelledError("Job was cancelled")
+
+            await self._run_blocking_and_drain(
+                _run_dumpyara_images,
+                current_stage,
+                self.work_dir,
+                cancellation_check=cancellation_check,
+            )
+            return str(self.work_dir)
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+            for firmware_path in firmware_paths:
+                safe_remove_file(firmware_path)
+
     async def extract_firmware(self, job: DumpJob, firmware_path: str) -> str:
         """Extract firmware and return extraction directory."""
-        console.print(f"[blue]Extracting firmware: {firmware_path}[/blue]")
+        if not job.dump_args.use_privdump:
+            console.print(f"[blue]Extracting firmware: {firmware_path}[/blue]")
 
         if job.dump_args.use_alt_dumper:
             extraction_dir = await self._extract_with_alternative_dumper(firmware_path)
@@ -49,22 +654,21 @@ class FirmwareExtractor:
         # extract_and_push.sh; without it every dump shipped its multi-GB source
         # archive at the repo root.
         if safe_remove_file(firmware_path):
-            console.print(f"[green]Removed original firmware archive: {firmware_path}[/green]")
+            if not job.dump_args.use_privdump:
+                console.print(f"[green]Removed original firmware archive: {firmware_path}[/green]")
         else:
-            console.print(f"[yellow]Failed to remove original firmware archive: {firmware_path}[/yellow]")
+            if not job.dump_args.use_privdump:
+                console.print(f"[yellow]Failed to remove original firmware archive: {firmware_path}[/yellow]")
 
         return extraction_dir
 
     async def _extract_with_python_dumper(self, firmware_path: str) -> str:
         """Extract using the modern Python dumpyara tool."""
         console.print("[blue]Python dumper extraction...[/blue]")
-        await asyncio.wait_for(
-            asyncio.to_thread(
-                _run_dumpyara,
-                Path(firmware_path),
-                self.work_dir,
-            ),
-            timeout=ONE_HOUR,
+        await self._run_blocking_and_drain(
+            _run_dumpyara,
+            Path(firmware_path),
+            self.work_dir,
         )
         console.print("[green]Python dumper extraction completed successfully[/green]")
 
