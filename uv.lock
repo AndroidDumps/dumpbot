@@ -709,7 +709,7 @@ requires-dist = [
     { name = "arq", specifier = ">=0.27.0,<1.0.0" },
     { name = "dumpyara", git = "https://github.com/AndroidDumps/pydumpyara?rev=f6011365c1aaec934e3aaec23d9855d11953bca6" },
     { name = "httpx", specifier = ">=0.28.1,<1.0.0" },
-    { name = "otadump", git = "https://github.com/AndroidDumps/otadump?rev=faf0f66c152a7eae87a95cd04c7150584fb93a49" },
+    { name = "otadump", git = "https://github.com/AndroidDumps/otadump?rev=830b30a09d0a9e3935cf87c4a87c162a9a4138d7" },
     { name = "pillow", specifier = ">=12.1.1,<13.0.0" },
     { name = "py7zr", specifier = ">=1.1.3,<2.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
@@ -1355,7 +1355,7 @@ wheels = [
 [[package]]
 name = "otadump"
 version = "0.1.3"
-source = { git = "https://github.com/AndroidDumps/otadump?rev=faf0f66c152a7eae87a95cd04c7150584fb93a49#faf0f66c152a7eae87a95cd04c7150584fb93a49" }
+source = { git = "https://github.com/AndroidDumps/otadump?rev=830b30a09d0a9e3935cf87c4a87c162a9a4138d7#830b30a09d0a9e3935cf87c4a87c162a9a4138d7" }
 
 [[package]]
 name = "packaging"
