@@ -1,6 +1,5 @@
 from pathlib import Path
 from typing import Any, Dict, Tuple
-from urllib.parse import urlparse
 
 import httpx
 from rich.console import Console
@@ -318,30 +317,3 @@ class GitLabManager:
                 console.print("[green]Channel notification sent successfully[/green]")
             else:
                 console.print(f"[yellow]Failed to send channel notification: {response.text}[/yellow]")
-
-    async def check_whitelist(self, url: str) -> bool:
-        """Check if URL is in whitelist."""
-        whitelist_file = Path.home() / "dumpbot" / "whitelist.txt"
-
-        if not whitelist_file.exists():
-            console.print("[yellow]Whitelist file not found[/yellow]")
-            return False
-
-        try:
-            with open(whitelist_file, 'r') as f:
-                whitelist_domains = [line.strip() for line in f if line.strip()]
-
-            hostname = (urlparse(url).hostname or "").lower()
-
-            for domain in whitelist_domains:
-                normalized_domain = domain.lower()
-                if hostname == normalized_domain or hostname.endswith(f".{normalized_domain}"):
-                    console.print(f"[green]URL is whitelisted (domain: {domain})[/green]")
-                    return True
-
-            console.print("[yellow]URL is not whitelisted[/yellow]")
-            return False
-
-        except Exception as e:
-            console.print(f"[red]Error checking whitelist: {e}[/red]")
-            return False

@@ -33,6 +33,7 @@ from dumpyarabot.message_queue import message_queue
 from dumpyarabot.process_utils import reset_current_job_id, set_current_job_id
 from dumpyarabot.property_extractor import PropertyExtractor
 from dumpyarabot.schemas import DumpJob
+from dumpyarabot import url_utils
 
 console = Console()
 
@@ -512,7 +513,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             try:
                 # Initialize components (exact same as original)
                 await _raise_if_job_cancel_requested(job_id)
-                downloader = FirmwareDownloader(str(work_dir))
                 extractor = FirmwareExtractor(str(work_dir))
                 prop_extractor = PropertyExtractor(str(work_dir))
                 gitlab_manager = GitLabManager(str(work_dir))
@@ -523,8 +523,6 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Step 2: GitLab access validation (8%)
                 await update_progress_with_metadata(job_data, " Validating GitLab access...", 8.0)
                 await _validate_gitlab_access()
-                is_whitelisted = await gitlab_manager.check_whitelist(str(job_data["dump_args"]["url"]))
-
                 # Step 3: URL optimization and mirror selection (12%)
                 await update_progress_with_metadata(job_data, " Optimizing download URL and selecting mirrors...", 12.0)
 
@@ -533,23 +531,19 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 # Create DumpJob object for components that need it
                 dump_job = DumpJob.model_validate(job_data)
+                ordered_urls = [
+                    str(dump_job.dump_args.url),
+                    *[str(url) for url in dump_job.dump_args.delta_urls],
+                ]
+                if dump_job.dump_args.use_alt_dumper and len(ordered_urls) > 1:
+                    raise RuntimeError("Alternative dumper cannot be used with delta OTA chains")
+                is_whitelisted = all(
+                    url_utils.is_whitelisted_url(url) for url in ordered_urls
+                )
+                firmware_paths = []
 
                 # Download with live progress via aria2 RPC callback.
                 # Download progress is mapped into the 15%-50% band of overall job progress.
-                async def _on_download_progress(dp: DownloadProgress) -> None:
-                    dl_pct = dp.percentage  # 0-100 within download
-                    overall_pct = 15.0 + (dl_pct / 100.0) * 35.0  # map to 15%-50%
-                    dl_info = format_download_progress(dp)
-                    step_msg = f" Downloading firmware...\n{dl_info}"
-
-                    progress_data = {
-                        "current_step": step_msg,
-                        "percentage": overall_pct,
-                        "current_step_number": 4,
-                        "total_steps": 25,
-                    }
-                    await _send_status_update(job_data, step_msg, progress_data, job_data.get("metadata"))
-
                 # Use PeriodicTimerUpdate as a fallback for downloaders without
                 # live progress (Google Drive, MediaFire, MEGA, wget fallback).
                 # When aria2 RPC is active, the callback above sends updates instead.
@@ -560,9 +554,36 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "percentage": 15.0,
                 }
                 async with PeriodicTimerUpdate(job_data, " Downloading firmware...", download_progress):
-                    firmware_path, firmware_name = await downloader.download_firmware(
-                        dump_job, on_progress=_on_download_progress
-                    )
+                    for index, url in enumerate(ordered_urls):
+                        await _raise_if_job_cancel_requested(job_id)
+                        downloader = FirmwareDownloader(str(work_dir / "downloads" / f"{index:03d}"))
+
+                        async def _on_download_progress(
+                            dp: DownloadProgress, stage: int = index
+                        ) -> None:
+                            stage_progress = (stage + dp.percentage / 100.0) / len(ordered_urls)
+                            overall_pct = 15.0 + stage_progress * 35.0
+                            if len(ordered_urls) == 1:
+                                step_msg = f" Downloading firmware...\n{format_download_progress(dp)}"
+                            else:
+                                step_msg = (
+                                    f" Downloading firmware {stage + 1}/{len(ordered_urls)}...\n"
+                                    f"{format_download_progress(dp)}"
+                                )
+                            progress_data = {
+                                "current_step": step_msg,
+                                "percentage": overall_pct,
+                                "current_step_number": 4,
+                                "total_steps": 25,
+                            }
+                            await _send_status_update(
+                                job_data, step_msg, progress_data, job_data.get("metadata")
+                            )
+
+                        firmware_path, _ = await downloader.download_firmware(
+                            dump_job, on_progress=_on_download_progress, url=url
+                        )
+                        firmware_paths.append(firmware_path)
 
                 # Step 5: Download completed (50%)
                 await update_progress_with_metadata(job_data, " Firmware download completed", 50.0)
@@ -572,7 +593,10 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
 
                 # Use periodic timer for extraction operation
                 async with PeriodicTimerUpdate(job_data, " Extracting firmware partitions...", {"current_step": "Extract", "total_steps": 25, "current_step_number": 6, "percentage": 52.0}):
-                    await extractor.extract_firmware(dump_job, firmware_path)
+                    if dump_job.dump_args.delta_urls:
+                        await extractor.extract_delta_chain(dump_job, firmware_paths)
+                    else:
+                        await extractor.extract_firmware(dump_job, firmware_paths[0])
 
                 # Step 7: Firmware extraction completed (56%)
                 await update_progress_with_metadata(job_data, " Firmware extraction completed", 56.0)

@@ -9,8 +9,9 @@ StartLimitBurst=5
 [Service]
 User=jenkins
 WorkingDirectory=/var/lib/jenkins/dumpbot
+Environment=PATH=/var/lib/jenkins/.cargo/bin:/var/lib/jenkins/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # pydantic-settings reads `.env` from the working directory, so no EnvironmentFile needed.
-ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python -m dumpyarabot
+ExecStart=/var/lib/jenkins/.cargo/bin/uv run --python 3.14 --no-sync -m dumpyarabot
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30

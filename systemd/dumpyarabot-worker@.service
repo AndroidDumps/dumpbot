@@ -12,7 +12,7 @@ User=jenkins
 # neither of which is on the default system PATH.
 Environment=PATH=/var/lib/jenkins/.cargo/bin:/var/lib/jenkins/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/var/lib/jenkins/dumpbot
-ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python run_arq_worker.py worker_%i
+ExecStart=/var/lib/jenkins/.cargo/bin/uv run --python 3.14 --no-sync run_arq_worker.py worker_%i
 Restart=on-failure
 RestartSec=10
 # Worker's job_timeout is 7200s (2h). Give it that plus a minute of grace

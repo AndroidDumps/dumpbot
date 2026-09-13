@@ -30,6 +30,7 @@ class FirmwareDownloader:
         self,
         job: DumpJob,
         on_progress: ProgressCallback | None = None,
+        url: str | None = None,
     ) -> Tuple[str, str]:
         """Download firmware and return (file_path, file_name).
 
@@ -38,7 +39,7 @@ class FirmwareDownloader:
             on_progress: Optional async callback invoked with each DownloadProgress
                          snapshot during aria2 RPC downloads.
         """
-        url = str(job.dump_args.url)
+        url = url or str(job.dump_args.url)
 
         # Check if it's a local file
         if os.path.isfile(url):
@@ -261,5 +262,4 @@ class FirmwareDownloader:
             )
 
         return str(latest_file)
-
 

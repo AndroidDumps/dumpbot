@@ -8,6 +8,7 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 
 class DumpArguments(BaseModel):
     url: AnyHttpUrl
+    delta_urls: List[AnyHttpUrl] = Field(default_factory=list)
     use_alt_dumper: bool
     force: bool = False
     use_privdump: bool
@@ -22,6 +23,7 @@ class PendingReview(BaseModel):
     requester_id: int
     requester_username: Optional[str]
     url: str
+    delta_urls: List[str] = Field(default_factory=list)
     review_chat_id: int
     review_message_id: int
     submission_confirmation_message_id: Optional[int] = None
