@@ -1,8 +1,13 @@
 import asyncio
+import shutil
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from dumpyara.dumpyara import dumpyara
+from dumpyara.steps.extract_images import extract_images as dumpyara_extract_images
 from dumpyara.utils import multipartitions as dumpyara_multipartitions
+import otadump
 from rich.console import Console
 
 from dumpyarabot.file_utils import (
@@ -21,11 +26,74 @@ from dumpyarabot.process_utils import (
 from dumpyarabot.schemas import DumpJob
 
 console = Console()
+_T = TypeVar("_T")
 
 def _run_dumpyara(firmware_path: Path, output_path: Path) -> None:
     """Run Dumpyara with its reliable in-process payload parser."""
     dumpyara_multipartitions.OTADUMP_EXECUTABLE = None
     dumpyara(firmware_path, output_path)
+
+
+def _run_dumpyara_images(images_path: Path, output_path: Path) -> None:
+    dumpyara_extract_images(images_path, output_path)
+
+
+def _carry_forward_images(source_dir: Path, output_dir: Path) -> None:
+    for source_image in source_dir.glob("*.img"):
+        destination = output_dir / source_image.name
+        if not destination.exists():
+            shutil.copy2(source_image, destination)
+
+
+def _delta_stage_has_images(stage_dir: Path) -> bool:
+    return any(stage_dir.glob("*.img"))
+
+
+def _publish_stage_children(staging_dir: Path, destination_dir: Path) -> None:
+    children = list(staging_dir.iterdir())
+    if not children:
+        raise RuntimeError("delta chain final stage produced no files")
+    preexisting = [destination_dir / child.name for child in children if (destination_dir / child.name).exists()]
+    if preexisting:
+        raise RuntimeError(f"final output already exists: {preexisting[0]}")
+
+    moved: list[Path] = []
+    try:
+        for child in children:
+            target = destination_dir / child.name
+            shutil.move(str(child), str(target))
+            moved.append(target)
+    except BaseException:
+        for moved_child in moved:
+            if moved_child.exists():
+                if moved_child.is_dir():
+                    shutil.rmtree(moved_child)
+                else:
+                    moved_child.unlink()
+        raise
+
+
+async def _run_thread(
+    function: Callable[..., _T],
+    *args: object,
+    timeout: float,
+    token: otadump.CancellationToken,
+    **kwargs: object,
+) -> _T:
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        token.cancel()
+        while True:
+            try:
+                await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        raise
 
 
 class FirmwareExtractor:
@@ -34,6 +102,79 @@ class FirmwareExtractor:
     def __init__(self, work_dir: str):
         self.work_dir = Path(work_dir)
         self.firmware_extractor_path = Path.home() / "Firmware_extractor"
+
+    async def extract_delta_chain(self, job: DumpJob, firmware_paths: Sequence[str]) -> str:
+        if len(firmware_paths) < 2:
+            raise ValueError("A delta chain requires a base and at least one delta OTA")
+        if job.dump_args.use_alt_dumper:
+            raise ValueError("Alternative dumper is not supported for delta OTA chains")
+
+        staging_root = self.work_dir / ".ota_staging"
+        shutil.rmtree(staging_root, ignore_errors=True)
+        staging_root.mkdir(parents=True, exist_ok=True)
+        cancellation_token = otadump.CancellationToken()
+
+        try:
+            current_stage = staging_root / "stage_000"
+            await _run_thread(
+                otadump.extract,
+                Path(firmware_paths[0]),
+                current_stage,
+                timeout=ONE_HOUR,
+                token=cancellation_token,
+                cancellation_token=cancellation_token,
+            )
+            if not _delta_stage_has_images(current_stage):
+                raise RuntimeError(
+                    f"delta stage produced no images: {Path(firmware_paths[0]).name}"
+                )
+            for index, firmware_path in enumerate(firmware_paths[1:], start=1):
+                next_stage = staging_root / f"stage_{index:03d}"
+                await _run_thread(
+                    otadump.extract,
+                    Path(firmware_path),
+                    next_stage,
+                    timeout=ONE_HOUR,
+                    token=cancellation_token,
+                    source_dir=current_stage,
+                    cancellation_token=cancellation_token,
+                )
+                if not _delta_stage_has_images(next_stage):
+                    raise RuntimeError(
+                        f"delta stage produced no images: {Path(firmware_path).name}"
+                    )
+                await _run_thread(
+                    _carry_forward_images,
+                    current_stage,
+                    next_stage,
+                    timeout=ONE_HOUR,
+                    token=cancellation_token,
+                )
+                shutil.rmtree(current_stage)
+                current_stage = next_stage
+
+            final_output = staging_root / "final"
+            final_output.mkdir(parents=True, exist_ok=True)
+            await _run_thread(
+                _run_dumpyara_images,
+                current_stage,
+                final_output,
+                timeout=ONE_HOUR,
+                token=cancellation_token,
+            )
+            system_path = final_output / "system"
+            if not system_path.exists():
+                raise RuntimeError("dumpyara output missing required non-empty system")
+            if system_path.is_file() and system_path.stat().st_size == 0:
+                raise RuntimeError("dumpyara output missing required non-empty system")
+            if system_path.is_dir() and not any(system_path.iterdir()):
+                raise RuntimeError("dumpyara output missing required non-empty system")
+            _publish_stage_children(final_output, self.work_dir)
+            return str(self.work_dir)
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+            for firmware_path in firmware_paths:
+                safe_remove_file(firmware_path)
 
     async def extract_firmware(self, job: DumpJob, firmware_path: str) -> str:
         """Extract firmware and return extraction directory."""

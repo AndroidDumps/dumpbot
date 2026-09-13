@@ -76,6 +76,8 @@ def _build_status_message_text(url: str, dump_args: schemas.DumpArguments, job_i
         initial_text = " *Private Dump Job Queued*\n\n"
     else:
         initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
+        if dump_args.delta_urls:
+            initial_text += f" *Delta OTAs:* {len(dump_args.delta_urls)}\n"
 
     initial_text += f"*Job ID:* `{job_id}`\n"
 
@@ -113,38 +115,43 @@ async def handle_request_message(
         console.print(f"[yellow]Message from non-request chat: {chat.id}[/yellow]")
         return
 
-    # 2. Parse message for "#request <URL>" pattern (flexible format)
-    # Supports: "#requesthttps://...", "#request https://...", "#request please https://...", etc.
-    # DOTALL flag allows . to match newlines for multi-line messages
-    request_pattern = r"#request\s*.*?(https?://[^\s]+)"
-    match = re.search(request_pattern, message.text or "", re.IGNORECASE | re.DOTALL)
+    request_pattern = r"#request"
+    match = re.search(request_pattern, message.text or "", re.IGNORECASE)
 
     if not match:
         console.print("[yellow]No valid #request pattern found[/yellow]")
         return
 
-    url_str = match.group(1)
-    console.print(f"[blue]Processing request for URL: {url_str}[/blue]")
+    free_text, url_strings = url_utils.parse_moderated_request(message.text or "")
+    if not url_strings:
+        console.print("[yellow]No URL found after #request[/yellow]")
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text=(
+                " Invalid request format. Use `#request optional text "
+                "https://base.url [https://delta.url ...]`"
+            ),
+            reply_to_message_id=message.message_id,
+            context={"moderated_request": True, "error": "missing_url"},
+        )
+        return
+    console.print(f"[blue]Processing request with {len(url_strings)} URL(s)[/blue]")
 
     try:
-        # 3. Validate URL using new utility
-        is_valid, validated_url, error_msg = await url_utils.validate_and_normalize_url(url_str)
-        if not is_valid:
-            raise ValueError(error_msg)
-
+        validated_urls = []
+        for url_str in url_strings:
+            is_valid, validated_url, error_msg = await url_utils.validate_and_normalize_url(url_str)
+            if not is_valid or validated_url is None:
+                raise ValueError(error_msg)
+            validated_urls.append(validated_url)
         # 4. Generate request_id
         request_id = utils.generate_request_id()
 
         # 5. Send review message to REVIEW_CHAT_ID with Accept/Reject buttons
-        raw_message = message.text or ""
-        # Remove the URL from the original message since it's already displayed above
-        message_without_url = re.sub(r'https?://[^\s]+', '', raw_message).strip()
-        # Remove #request tag and extra whitespace
-        message_without_url = re.sub(r'#request\s*', '', message_without_url).strip()
-        original_message = _truncate_message(message_without_url) if message_without_url else "No additional text"
+        original_message = _truncate_message(free_text) if free_text else "No additional text"
         review_text = REVIEW_TEMPLATE.format(
             username=escape_markdown(user.username or user.first_name or str(user.id)),
-            url=escape_markdown(str(validated_url)),
+            url=escape_markdown("\n".join(validated_urls)),
             request_id=request_id,
             original_message=escape_markdown(original_message),
         )
@@ -169,7 +176,7 @@ async def handle_request_message(
         # 6. Notify user of successful submission directly to get real Telegram message ID
         submission_message = await message_queue.send_immediate_message(
             chat_id=chat.id,
-            text=SUBMISSION_TEMPLATE.format(url=validated_url),
+            text=SUBMISSION_TEMPLATE.format(url=validated_urls[0]),
             parse_mode=settings.DEFAULT_PARSE_MODE,
             reply_to_message_id=message.message_id,
             disable_web_page_preview=True,
@@ -182,7 +189,8 @@ async def handle_request_message(
             original_message_id=message.message_id,
             requester_id=user.id,
             requester_username=user.username,
-            url=str(validated_url),  # Convert AnyHttpUrl to string for storage
+            url=str(validated_urls[0]),
+            delta_urls=[str(url) for url in validated_urls[1:]],
             review_chat_id=settings.REVIEW_CHAT_ID,
             review_message_id=review_message.message_id,
             submission_confirmation_message_id=submission_message.message_id,
@@ -193,11 +201,11 @@ async def handle_request_message(
         console.print(f"[green]Request {request_id} processed successfully[/green]")
 
     except ValueError:
-        console.print(f"[red]Invalid URL provided: {url_str}[/red]")
+        console.print("[red]Invalid URL provided in moderated request[/red]")
         await message_queue.send_error(
             chat_id=chat.id,
             text=" Invalid URL format provided",
-            context={"moderated_request": True, "url": url_str, "error": "invalid_url"}
+            context={"moderated_request": True, "error": "invalid_url"}
         )
     except Exception as e:
         console.print(f"[red]Error processing request: {e}[/red]")
@@ -205,7 +213,7 @@ async def handle_request_message(
         await message_queue.send_error(
             chat_id=chat.id,
             text=" An error occurred while processing your request",
-            context={"moderated_request": True, "url": url_str, "error": "processing_failed"}
+            context={"moderated_request": True, "error": "processing_failed"}
         )
 
 
@@ -264,6 +272,11 @@ async def _handle_accept_callback(
 
     # Get current options state
     options_state = await ReviewStorage.get_options_state(context, request_id)
+    if options_state.alt and pending_review.delta_urls:
+        await query.edit_message_text(
+            "Alternative dumper cannot be used with delta OTA chains"
+        )
+        return
 
     # Update message to show options
     await query.edit_message_text(
@@ -309,6 +322,12 @@ async def _handle_toggle_callback(
     options_state = await ReviewStorage.get_options_state(context, request_id)
 
     if option == "alt":
+        if not options_state.alt and pending_review.delta_urls:
+            await query.answer(
+                "Alternative dumper cannot be used with delta OTA chains",
+                show_alert=True,
+            )
+            return
         options_state.alt = not options_state.alt
     elif option == "force":
         options_state.force = not options_state.force
@@ -336,18 +355,23 @@ async def _handle_submit_callback(
         return
 
     options_state = await ReviewStorage.get_options_state(context, request_id)
+    if options_state.alt and pending_review.delta_urls:
+        await query.edit_message_text(
+            "Alternative dumper cannot be used with delta OTA chains"
+        )
+        return
 
     try:
         # Create DumpArguments with the selected options
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
+            delta_urls=pending_review.delta_urls,
             use_alt_dumper=options_state.alt,
             force=options_state.force,
             use_privdump=options_state.privdump,
             initial_message_id=pending_review.original_message_id,
             initial_chat_id=pending_review.original_chat_id,
         )
-
         job_id = secrets.token_hex(8)
         status_message_id, status_chat_id, queued_text = await _create_status_message(
             context,
@@ -487,17 +511,25 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     force = "f" in options
     use_privdump = "p" in options
 
+    if use_alt and pending_review.delta_urls:
+        await message_queue.send_error(
+            chat_id=chat.id,
+            text="Alternative dumper cannot be used with delta OTA chains",
+            context={"command": "accept", "error": "alt_delta_not_supported", "request_id": request_id},
+        )
+        return
+
     try:
         # Start dump process with options
         dump_args = schemas.DumpArguments(
             url=schemas.AnyHttpUrl(pending_review.url),  # Convert string back to AnyHttpUrl
+            delta_urls=pending_review.delta_urls,
             use_alt_dumper=use_alt,
             force=force,
             use_privdump=use_privdump,
             initial_message_id=pending_review.original_message_id,
             initial_chat_id=pending_review.original_chat_id,
         )
-
         job_id = secrets.token_hex(8)
         status_message_id, status_chat_id, queued_text = await _create_status_message(
             context,

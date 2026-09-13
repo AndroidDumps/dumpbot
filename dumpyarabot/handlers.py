@@ -88,7 +88,7 @@ async def dump(
     # Ensure that we had some arguments passed
     if not context.args:
         console.print("[yellow]No arguments provided for dump command[/yellow]")
-        usage = "Usage: `/dump [URL] [a|f|p]`\nURL: required, a: alt dumper, f: force, p: use privdump"
+        usage = "Usage: `/dump BASE [DELTA ...] [a|f|p]`\nAt least one URL is required; a: alt dumper, f: force, p: use privdump"
         await message_queue.send_reply(
             chat_id=chat.id,
             text=usage,
@@ -97,15 +97,34 @@ async def dump(
         )
         return
 
-    url = context.args[0]
-    options = "".join("".join(context.args[1:]).split())
+    try:
+        urls, options = url_utils.parse_dump_tokens(list(context.args))
+    except ValueError as error:
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text=str(error),
+            reply_to_message_id=message.message_id,
+            context={"command": "dump", "error": "missing_url"},
+        )
+        return
 
     use_alt_dumper = "a" in options
     force = "f" in options
     use_privdump = "p" in options
 
+    if use_alt_dumper and len(urls) > 1:
+        await message_queue.send_reply(
+            chat_id=chat.id,
+            text="`a` (alternative dumper) cannot be used with delta OTA chains",
+            reply_to_message_id=message.message_id,
+            context={"command": "dump", "error": "alt_delta_not_supported"},
+        )
+        return
+
     console.print("[green]Dump request:[/green]")
-    console.print(f"  URL: {url}")
+    console.print(f"  URL: {urls[0]}")
+    if len(urls) > 1:
+        console.print(f"  Delta OTAs: {len(urls) - 1}")
     console.print(f"  Alt dumper: {use_alt_dumper}")
     console.print(f"  Force: {force}")
     console.print(f"  Privdump: {use_privdump}")
@@ -127,13 +146,16 @@ async def dump(
 
     # Try to validate args and queue dump job
     try:
-        # Validate URL using new utility
-        is_valid, normalized_url, error_msg = await url_utils.validate_and_normalize_url(url)
-        if not is_valid:
-            raise ValueError(error_msg)
+        normalized_urls = []
+        for url in urls:
+            is_valid, normalized_url, error_msg = await url_utils.validate_and_normalize_url(url)
+            if not is_valid or normalized_url is None:
+                raise ValueError(error_msg)
+            normalized_urls.append(normalized_url)
 
         dump_args = schemas.DumpArguments(
-            url=normalized_url,
+            url=normalized_urls[0],
+            delta_urls=normalized_urls[1:],
             use_alt_dumper=use_alt_dumper,
             force=force,
             use_privdump=use_privdump,
@@ -154,7 +176,9 @@ async def dump(
         if use_privdump:
             initial_text = " *Private Dump Job Queued*\n\n"
         else:
-            initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{url}`\n"
+            initial_text = f" *Firmware Dump Queued*\n\n *URL:* `{urls[0]}`\n"
+            if len(urls) > 1:
+                initial_text += f" *Delta OTAs:* {len(urls) - 1}\n"
 
         initial_text += f"*Job ID:* `{job.job_id}`\n"
 
@@ -207,7 +231,7 @@ async def dump(
                 "chat_id": chat.id,
                 "message_id": initial_message_id,
                 "user_id": message.from_user.id if message.from_user else 0,
-                "url": normalized_url
+                "url": normalized_urls[0],
             }
         }
 
@@ -217,15 +241,15 @@ async def dump(
         console.print(f"[green]Dump job {job_id} queued with enhanced metadata[/green]")
 
     except ValueError as e:
-        console.print(f"[red]Invalid URL provided: {url} - {e}[/red]")
-        response_text = f" *Invalid URL:* {url}\n\nPlease provide a valid firmware download URL."
+        console.print(f"[red]Invalid URL provided: {e}[/red]")
+        response_text = " *Invalid URL provided*\n\nPlease provide valid firmware download URL(s)."
 
         # Send error message as reply
         await message_queue.send_reply(
             chat_id=chat.id,
             text=response_text,
             reply_to_message_id=None if use_privdump else message.message_id,
-            context={"command": "dump", "url": url, "error": "validation_error"}
+            context={"command": "dump", "error": "validation_error"}
         )
 
     except Exception as e:
@@ -239,7 +263,7 @@ async def dump(
             chat_id=chat.id,
             text=response_text,
             reply_to_message_id=None if use_privdump else message.message_id,
-            context={"command": "dump", "url": url, "error": "unexpected_error"}
+            context={"command": "dump", "error": "unexpected_error"}
         )
 
 

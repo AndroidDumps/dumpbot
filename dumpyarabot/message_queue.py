@@ -1389,6 +1389,7 @@ class MessageQueue:
         dump_args_data = job_payload.get("dump_args") or {}
         telegram_context = metadata.get("telegram_context") or {}
         url = telegram_context.get("url") or dump_args_data.get("url")
+        delta_urls = dump_args_data.get("delta_urls") or []
 
         if not url:
             return None
@@ -1399,6 +1400,7 @@ class MessageQueue:
             "status": self._arq_status_to_job_status(arq_status["status"]),
             "dump_args": DumpArguments(
                 url=url,
+                delta_urls=delta_urls,
                 use_alt_dumper=dump_args_data.get("use_alt_dumper", False),
                 force=dump_args_data.get("force", False),
                 use_privdump=dump_args_data.get("use_privdump", False),

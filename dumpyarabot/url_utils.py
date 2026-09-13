@@ -1,6 +1,8 @@
 """URL validation and normalization utilities."""
 
+import re
 from typing import Optional, Tuple
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -8,6 +10,58 @@ from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 
 HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+URL_TOKEN_PATTERN = re.compile(r"^https?://\S+$", re.IGNORECASE)
+
+
+def parse_moderated_request(message_text: str) -> tuple[str, list[str]]:
+    """Extract free text and the consecutive URL tokens consumed by #request."""
+    match = re.search(r"#request", message_text, re.IGNORECASE)
+    if not match:
+        return "", []
+
+    prefix_tokens = message_text[: match.start()].strip().split()
+    tail_tokens = message_text[match.end() :].strip().split()
+    between_tokens: list[str] = []
+    urls: list[str] = []
+    index = 0
+
+    while index < len(tail_tokens) and not URL_TOKEN_PATTERN.fullmatch(tail_tokens[index]):
+        between_tokens.append(tail_tokens[index])
+        index += 1
+
+    while index < len(tail_tokens) and URL_TOKEN_PATTERN.fullmatch(tail_tokens[index]):
+        urls.append(tail_tokens[index])
+        index += 1
+
+    suffix_tokens = tail_tokens[index:]
+    message_tokens = [*prefix_tokens, *between_tokens, *suffix_tokens]
+    return " ".join(message_tokens).strip(), urls
+
+
+def parse_dump_tokens(tokens: list[str]) -> tuple[list[str], str]:
+    """Split ordered firmware URLs from an optional trailing mode token."""
+    values = list(tokens)
+    options = ""
+    while values and values[-1] and set(values[-1].lower()) <= set("afp"):
+        options = values.pop().lower() + options
+    if not values:
+        raise ValueError("At least one firmware URL is required")
+    return values, options
+
+
+def is_whitelisted_url(url: str) -> bool:
+    """Check URL hostname against whitelist domains."""
+    whitelist_file = Path.home() / "dumpbot" / "whitelist.txt"
+    if not whitelist_file.exists():
+        return False
+    try:
+        with whitelist_file.open("r", encoding="utf-8") as handle:
+            domains = [line.strip().lower() for line in handle if line.strip()]
+    except OSError:
+        return False
+
+    hostname = (urlparse(url).hostname or "").lower()
+    return any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains)
 
 
 async def validate_and_normalize_url(url_str: str) -> Tuple[bool, Optional[str], Optional[str]]:
