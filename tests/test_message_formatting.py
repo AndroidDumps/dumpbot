@@ -72,3 +72,30 @@ async def test_completion_message_has_no_unescaped_underscore_outside_code_spans
     assert "_" not in stripped, (
         "unescaped underscore outside a code span breaks Telegram Markdown: " f"{msg!r}"
     )
+
+
+async def test_failure_message_shows_reason_inline():
+    """The reason (e.g. a download timeout) must be visible in the Telegram
+    edit itself, not only in the attached failure log file."""
+    job_data = {
+        "job_id": "21a9ba89259ca4df",
+        "worker_id": "arq@21a9ba89",
+        "dump_args": {"url": "https://example.com/lagos_g_user.zip"},
+    }
+    progress = {"current_step": "Failed", "percentage": 52.0, "error_message": "Download timed out after 3600s"}
+    metadata = {
+        "error_context": {
+            "current_step": "Downloading firmware",
+            "last_successful_step": "Validating URL",
+            "message": "Download timed out after 3600s",
+        }
+    }
+
+    msg = await format_comprehensive_progress_message(job_data, " Failed at: Downloading firmware", progress, metadata)
+
+    assert "Download timed out after 3600s" in msg
+
+    stripped = _strip_code_spans_and_escapes(msg)
+    assert "_" not in stripped, (
+        "unescaped underscore outside a code span breaks Telegram Markdown: " f"{msg!r}"
+    )

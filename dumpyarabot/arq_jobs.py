@@ -473,7 +473,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             job_data["metadata"].update({
                 "status": "failed",
                 "end_time": datetime.now(timezone.utc).isoformat(),
-                "error_context": {"message": str(e), "current_step": "Telegram verification"},
+                "error_context": {"message": _sanitize_text(str(e)), "current_step": "Telegram verification"},
             })
             # Do not queue a failure notification from this early-return path.
             # Preflight failures can include Telegram reachability problems or
@@ -688,7 +688,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "status": "cancelled",
                     "end_time": datetime.now(timezone.utc).isoformat(),
                     "error_context": {
-                        "message": str(e),
+                        "message": _sanitize_text(str(e)),
                         "current_step": "Cancellation requested",
                         "failure_time": datetime.now(timezone.utc).isoformat(),
                     }
@@ -706,7 +706,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "status": "failed",
                     "end_time": datetime.now(timezone.utc).isoformat(),
                     "error_context": {
-                        "message": str(e),
+                        "message": _sanitize_text(str(e)),
                         "current_step": progress_history[-1].get("message", "Unknown step") if progress_history else "Unknown step",
                         "last_successful_step": _derive_last_successful_step(
                             progress_history,
@@ -734,7 +734,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
             "status": "failed",
             "end_time": datetime.now(timezone.utc).isoformat(),
             "error_context": {
-                "message": f"Critical error: {str(e)}",
+                "message": _sanitize_text(f"Critical error: {str(e)}"),
                 "current_step": "Critical failure",
                 "last_successful_step": _derive_last_successful_step(progress_history) or "None",
                 "failure_time": datetime.now(timezone.utc).isoformat(),

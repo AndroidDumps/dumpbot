@@ -352,12 +352,17 @@ async def format_comprehensive_progress_message(
                     fingerprint = fingerprint[:47] + "..."
                 message += f" *Fingerprint:* `{fingerprint}`\n"
 
-    # Keep failure edits concise; detailed errors are sent as an attached log file.
+    # Full traceback still only goes to the attached log file, but the reason
+    # (e.g. "Download timed out after 3600s") is short enough to show inline.
     if progress and progress.get("error_message") and metadata and metadata.get("error_context"):
         error_ctx = metadata["error_context"]
         message += f"\n *Failed at:* {escape_markdown(error_ctx.get('current_step', 'Unknown step'))}\n"
         if error_ctx.get("last_successful_step"):
             message += f" *Last successful:* {escape_markdown(error_ctx['last_successful_step'])}\n"
+        if reason := error_ctx.get("message"):
+            if len(reason) > 300:
+                reason = reason[:297] + "..."
+            message += f" *Reason:* {escape_markdown(reason)}\n"
 
     return message
 
