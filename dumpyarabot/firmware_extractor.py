@@ -1,8 +1,10 @@
 import asyncio
+import shutil
 from pathlib import Path
 
 from dumpyara.dumpyara import dumpyara
 from dumpyara.utils import multipartitions as dumpyara_multipartitions
+from dumpyara.utils.shutil import setup_shutil_formats as dumpyara_setup_shutil_formats
 from rich.console import Console
 
 from dumpyarabot.file_utils import (
@@ -22,9 +24,27 @@ from dumpyarabot.schemas import DumpJob
 
 console = Console()
 
+def _register_dumpyara_shutil_formats() -> None:
+    """Register dumpyara's archive formats (7z, tar.md5, kdz, ...) with shutil.
+
+    Dumpyara extracts some payloads via ``shutil.unpack_archive`` but does not
+    register the custom formats it relies on. In particular ``.7z`` is missing
+    from CPython's registry, so extraction fails with "Unknown archive format"
+    unless we call this first. ``register_unpack_format`` raises
+    ``shutil.RegistryError`` (or ``ValueError`` for a duplicate name) when a
+    format is already registered, so swallow those to keep repeated calls
+    (multiple jobs per worker) safe.
+    """
+    try:
+        dumpyara_setup_shutil_formats()
+    except (ValueError, shutil.RegistryError):
+        pass
+
+
 def _run_dumpyara(firmware_path: Path, output_path: Path) -> None:
     """Run Dumpyara with its reliable in-process payload parser."""
     dumpyara_multipartitions.OTADUMP_EXECUTABLE = None
+    _register_dumpyara_shutil_formats()
     dumpyara(firmware_path, output_path)
 
 
