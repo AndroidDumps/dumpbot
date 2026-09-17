@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from rich.console import Console
@@ -19,6 +19,25 @@ GITLAB_BASE_URL = f"https://{GITLAB_SERVER}"
 def gitlab_http_client() -> httpx.AsyncClient:
     """Create an HTTP client that uses the GitLab TLS setting."""
     return httpx.AsyncClient(verify=settings.GITLAB_VERIFY_SSL)
+
+
+class GitLabAPIError(Exception):
+    """Raised when the GitLab API returns an unexpected response."""
+
+
+def _gitlab_request_error(action: str, response: httpx.Response) -> GitLabAPIError:
+    """Build an informative error for an unexpected GitLab API response."""
+    request_id = (
+        response.headers.get("x-request-id")
+        or response.headers.get("x-gitlab-request-id")
+        or response.headers.get("request-id")
+    )
+    message = f"{action} failed with HTTP {response.status_code}"
+    if request_id:
+        message += f" (request id: {request_id})"
+    if response.text:
+        message += f": {response.text}"
+    return GitLabAPIError(message)
 
 
 class GitLabManager:
@@ -78,11 +97,14 @@ class GitLabManager:
         """Ensure GitLab subgroup exists, create if necessary."""
         console.print(f"[blue]Checking subgroup: {subgroup_name}[/blue]")
 
+        full_path = quote(f"{self.org}/{subgroup_name}", safe="")
+        headers = {"Authorization": f"Bearer {dumper_token}"}
+
         async with gitlab_http_client() as client:
             # Check if subgroup exists
             response = await client.get(
-                f"https://{self.gitlab_server}/api/v4/groups/{self.org}%2f{subgroup_name}",
-                headers={"Authorization": f"Bearer {dumper_token}"},
+                f"https://{self.gitlab_server}/api/v4/groups/{full_path}",
+                headers=headers,
                 timeout=GITLAB_API_TIMEOUT
             )
 
@@ -92,11 +114,14 @@ class GitLabManager:
                 console.print(f"[green]Subgroup {subgroup_name} exists with ID: {group_id}[/green]")
                 return group_id
 
-            # Create subgroup
+            if response.status_code != 404:
+                raise _gitlab_request_error(f"Checking subgroup {subgroup_name}", response)
+
+            # Only a 404 above means the subgroup is absent; create it.
             console.print(f"[blue]Creating subgroup: {subgroup_name}[/blue]")
             create_response = await client.post(
                 f"https://{self.gitlab_server}/api/v4/groups",
-                headers={"Authorization": f"Bearer {dumper_token}"},
+                headers=headers,
                 data={
                     "name": subgroup_name.capitalize(),
                     "parent_id": self.parent_group_id,
@@ -111,18 +136,36 @@ class GitLabManager:
                 group_id = group_data["id"]
                 console.print(f"[green]Created subgroup {subgroup_name} with ID: {group_id}[/green]")
                 return group_id
-            else:
-                raise Exception(f"Failed to create subgroup {subgroup_name}: {create_response.text}")
+
+            # The create may have lost a race with a concurrent job; re-fetch once.
+            refetch_response = await client.get(
+                f"https://{self.gitlab_server}/api/v4/groups/{full_path}",
+                headers=headers,
+                timeout=GITLAB_API_TIMEOUT
+            )
+            if refetch_response.status_code == 200:
+                group_data = refetch_response.json()
+                group_id = group_data["id"]
+                console.print(
+                    f"[green]Subgroup {subgroup_name} was created concurrently "
+                    f"with ID: {group_id}[/green]"
+                )
+                return group_id
+
+            raise _gitlab_request_error(f"Creating subgroup {subgroup_name}", create_response)
 
     async def _ensure_project_exists(self, group_id: int, repo_name: str, dumper_token: str, repo_subgroup: str) -> int:
         """Ensure GitLab project exists, create if necessary."""
         console.print(f"[blue]Checking project: {repo_name}[/blue]")
 
+        full_path = quote(f"{self.org}/{repo_subgroup}/{repo_name}", safe="")
+        headers = {"Authorization": f"Bearer {dumper_token}"}
+
         async with gitlab_http_client() as client:
             # Check if project exists (using full path)
             response = await client.get(
-                f"https://{self.gitlab_server}/api/v4/projects/{self.org}%2f{repo_subgroup}%2f{repo_name}",
-                headers={"Authorization": f"Bearer {dumper_token}"},
+                f"https://{self.gitlab_server}/api/v4/projects/{full_path}",
+                headers=headers,
                 timeout=GITLAB_API_TIMEOUT
             )
 
@@ -132,11 +175,14 @@ class GitLabManager:
                 console.print(f"[green]Project {repo_name} exists with ID: {project_id}[/green]")
                 return project_id
 
-            # Create project
+            if response.status_code != 404:
+                raise _gitlab_request_error(f"Checking project {repo_name}", response)
+
+            # Only a 404 above means the project is absent; create it.
             console.print(f"[blue]Creating project: {repo_name}[/blue]")
             create_response = await client.post(
                 f"https://{self.gitlab_server}/api/v4/projects",
-                headers={"Authorization": f"Bearer {dumper_token}"},
+                headers=headers,
                 data={
                     "namespace_id": group_id,
                     "name": repo_name,
@@ -150,23 +196,46 @@ class GitLabManager:
                 project_id = project_data["id"]
                 console.print(f"[green]Created project {repo_name} with ID: {project_id}[/green]")
                 return project_id
-            else:
-                raise Exception(f"Failed to create project {repo_name}: {create_response.text}")
+
+            # The create may have lost a race with a concurrent job; re-fetch once.
+            refetch_response = await client.get(
+                f"https://{self.gitlab_server}/api/v4/projects/{full_path}",
+                headers=headers,
+                timeout=GITLAB_API_TIMEOUT
+            )
+            if refetch_response.status_code == 200:
+                project_data = refetch_response.json()
+                project_id = project_data["id"]
+                console.print(
+                    f"[green]Project {repo_name} was created concurrently "
+                    f"with ID: {project_id}[/green]"
+                )
+                return project_id
+
+            raise _gitlab_request_error(f"Creating project {repo_name}", create_response)
 
     async def _branch_exists(self, project_id: int, branch: str, dumper_token: str) -> bool:
-        """Check if branch already exists in project."""
+        """Check if branch already exists in project.
+
+        Only a 200 means the branch is present and a 404 means it is absent;
+        any other status is an error rather than a silent "not found".
+        """
+        encoded_branch = quote(branch, safe="")
+
         async with gitlab_http_client() as client:
             response = await client.get(
-                f"https://{self.gitlab_server}/api/v4/projects/{project_id}/repository/branches/{branch}",
+                f"https://{self.gitlab_server}/api/v4/projects/{project_id}/repository/branches/{encoded_branch}",
                 headers={"Authorization": f"Bearer {dumper_token}"},
                 timeout=GITLAB_API_TIMEOUT
             )
 
             if response.status_code == 200:
-                branch_data = response.json()
-                return branch_data.get("name") == branch
+                return True
 
-            return False
+            if response.status_code == 404:
+                return False
+
+            raise _gitlab_request_error(f"Checking branch {branch}", response)
 
     async def _setup_git_repository(self, branch: str, description: str) -> None:
         """Initialize git repository and configure it."""
