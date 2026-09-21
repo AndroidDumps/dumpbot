@@ -36,6 +36,11 @@ from dumpyarabot.schemas import DumpJob
 
 console = Console()
 
+# Ordering key for a cancelled status text. Progress sequences are percentages
+# (0-100), so a value above that range makes STORE_LATEST_STATUS_TEXT reject any
+# progress text that is still in flight when the user cancels.
+_CANCELLED_STATUS_SEQUENCE: float = 101.0
+
 # Patterns to sanitize from tracebacks to prevent credential exposure
 _SENSITIVE_PATTERNS = [
     re.compile(r'(Bearer\s+)\S+', re.IGNORECASE),
@@ -159,6 +164,8 @@ class PeriodicTimerUpdate:
 def _status_update_sequence(progress: Optional[Dict[str, Any]]) -> float:
     """Return the monotonic ordering key for the latest rendered job status."""
     if progress:
+        if progress.get("current_step") == "Cancelled":
+            return _CANCELLED_STATUS_SEQUENCE
         try:
             return float(progress.get("percentage", 0.0))
         except (TypeError, ValueError):
@@ -393,6 +400,46 @@ async def _send_failure_notification(
     except Exception as e:
         console.print(f"[red]Failed to send failure notification: {e}[/red]")
         console.print_exception()
+
+
+async def _send_cancelled_notification(job_data: Dict[str, Any]) -> None:
+    """Turn the job's progress message into a terminal cancelled state.
+
+    A cancel lands while progress updates are still in flight (the aria2
+    callback, PeriodicTimerUpdate, edits already queued for the consumer).
+    Those would put the old text back, because the consumer re-reads the
+    stored status text of the job before every edit (_process_message).
+    _status_update_sequence gives a cancelled update a sequence above the
+    0-100 progress range, thus STORE_LATEST_STATUS_TEXT discards any later
+    progress text and every queued edit renders this message instead.
+
+    No failure log file here: the user asked for the stop, there is nothing
+    to debug.
+    """
+    try:
+        metadata = job_data.get("metadata") or {}
+        progress_history = metadata.get("progress_history") or []
+        last_progress = progress_history[-1] if progress_history else {}
+        last_step = last_progress.get("message", "Unknown step")
+
+        cancel_progress = {
+            "current_step": "Cancelled",
+            "total_steps": 25,
+            "current_step_number": len(progress_history),
+            "percentage": last_progress.get("percentage", 0.0),
+        }
+
+        await _send_status_update(
+            job_data,
+            f" Cancelled at: {last_step}",
+            cancel_progress,
+            metadata,
+        )
+        console.print(
+            f"[yellow]Sent cancellation notice for job {job_data.get('job_id', 'unknown')}[/yellow]"
+        )
+    except Exception as e:
+        console.print(f"[red]Failed to send cancellation notice: {e}[/red]")
 
 
 async def _validate_gitlab_access() -> None:
@@ -693,8 +740,24 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                         "failure_time": datetime.now(timezone.utc).isoformat(),
                     }
                 })
-                await _send_failure_notification(job_data, str(e))
+                await _send_cancelled_notification(job_data)
                 return {"success": False, "error": str(e), "metadata": job_data["metadata"]}
+            except asyncio.CancelledError:
+                # ARQ's clean abort (Job.abort -> task.cancel) raises this.
+                # CancelledError is a BaseException, so the handler below never
+                # saw it and the progress message stayed frozen mid-dump.
+                console.print(f"[yellow]Job {job_id} aborted by cancellation request[/yellow]")
+                job_data["metadata"].update({
+                    "status": "cancelled",
+                    "end_time": datetime.now(timezone.utc).isoformat(),
+                    "error_context": {
+                        "message": f"Job {job_id} was cancelled",
+                        "current_step": "Cancellation requested",
+                        "failure_time": datetime.now(timezone.utc).isoformat(),
+                    }
+                })
+                await _send_cancelled_notification(job_data)
+                raise
             except Exception as e:
                 console.print(f"[red]Error in inner processing for job {job_id}: {e}[/red]")
 

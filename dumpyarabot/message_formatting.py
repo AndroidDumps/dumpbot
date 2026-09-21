@@ -285,8 +285,11 @@ async def format_comprehensive_progress_message(
 
     elapsed = calculate_elapsed_time(start_time)
 
-    # Determine status
-    if progress and progress.get("percentage", 0) >= 100:
+    # Determine status. A cancellation is terminal, so it outranks the
+    # percentage check below (a cancel can land on a 100% step).
+    if progress and progress.get("current_step") == "Cancelled":
+        status_text = "Firmware Dump Cancelled"
+    elif progress and progress.get("percentage", 0) >= 100:
         status_text = "Firmware Dump Completed"
     elif progress and progress.get("current_step") == "Failed":
         status_text = "Firmware Dump Failed"
