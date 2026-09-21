@@ -1203,11 +1203,11 @@ class MessageQueue:
         }
         return status_mapping.get(arq_status, JobStatus.FAILED)
 
-    async def cancel_job(self, job_id: str) -> JobCancelResult:
+    async def cancel_job(self, job_id: str, requested_by: Optional[str] = None) -> JobCancelResult:
         """Cancel an ARQ job."""
         from dumpyarabot.arq_config import arq_pool
 
-        result = await arq_pool.cancel_job(job_id)
+        result = await arq_pool.cancel_job(job_id, requested_by)
         color = "green" if result == JobCancelResult.CANCELLED else "yellow"
         console.print(f"[{color}]Cancel job {job_id}: {result.value}[/{color}]")
         return result

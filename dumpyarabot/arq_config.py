@@ -267,10 +267,26 @@ class ARQPool:
         pool = await self.get_pool()
         await pool.delete(self._make_job_processes_key(job_id))
 
-    async def request_job_cancel(self, job_id: str) -> None:
-        """Set a cooperative cancellation flag for a job."""
+    async def request_job_cancel(self, job_id: str, requested_by: Optional[str] = None) -> None:
+        """Set a cooperative cancellation flag for a job.
+
+        The flag value doubles as a record of who asked, so the worker can name
+        them in the job's final message.
+        """
         pool = await self.get_pool()
-        await pool.set(self._make_cancel_requested_key(job_id), "1", ex=WorkerSettings.job_timeout + 300)
+        await pool.set(
+            self._make_cancel_requested_key(job_id),
+            requested_by or "1",
+            ex=WorkerSettings.job_timeout + 300,
+        )
+
+    async def get_job_cancel_requester(self, job_id: str) -> Optional[str]:
+        """Who requested this job's cancellation, if it was recorded."""
+        pool = await self.get_pool()
+        value = await pool.get(self._make_cancel_requested_key(job_id))
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "replace")
+        return value if value and value != "1" else None
 
     async def is_job_cancel_requested(self, job_id: str) -> bool:
         """Check whether a cooperative cancellation was requested for a job."""
@@ -282,7 +298,7 @@ class ARQPool:
         pool = await self.get_pool()
         await pool.delete(self._make_cancel_requested_key(job_id))
 
-    async def cancel_job(self, job_id: str) -> JobCancelResult:
+    async def cancel_job(self, job_id: str, requested_by: Optional[str] = None) -> JobCancelResult:
         """Cancel an ARQ job without corrupting worker state."""
         pool = await self.get_pool()
 
@@ -291,6 +307,11 @@ class ARQPool:
             status = await job.status()
             if status == arq.jobs.JobStatus.not_found:
                 return JobCancelResult.NOT_FOUND
+
+            # Record the requester before aborting: a clean abort cancels the
+            # task outright, and the worker still has to name them in its final
+            # edit, so this cannot wait for the escalation path below.
+            await self.request_job_cancel(job_id, requested_by)
 
             # Try soft abort (30s covers PeriodicTimerUpdate's sleep interval)
             if await job.abort(timeout=30):
@@ -304,7 +325,7 @@ class ARQPool:
 
             # Still running — escalate to force-kill
             console.print(f"[yellow]Soft abort timed out for {job_id}, escalating to force-kill[/yellow]")
-            await self.request_job_cancel(job_id)
+            await self.request_job_cancel(job_id, requested_by)
             if await self.force_cancel_job(job_id):
                 return JobCancelResult.FORCE_KILLED
 

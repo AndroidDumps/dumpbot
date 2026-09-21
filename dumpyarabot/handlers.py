@@ -302,8 +302,10 @@ async def cancel_dump(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     console.print(f"  Privdump: {use_privdump}")
     console.print(f"  Requested by: {user.username} (ID: {user.id})")
 
+    requested_by = f"@{user.username}" if user.username else user.full_name
+
     try:
-        result = await message_queue.cancel_job(job_id)
+        result = await message_queue.cancel_job(job_id, requested_by=requested_by)
         eid = escape_markdown(job_id)
         if result == JobCancelResult.CANCELLED:
             response_message = f" *Job cancelled*\n\n`{eid}`\n\nCleanly aborted."

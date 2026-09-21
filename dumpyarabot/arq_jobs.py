@@ -416,11 +416,24 @@ async def _send_cancelled_notification(job_data: Dict[str, Any]) -> None:
     No failure log file here: the user asked for the stop, there is nothing
     to debug.
     """
+    from dumpyarabot.arq_config import arq_pool
+    from dumpyarabot.utils import escape_markdown
+
     try:
         metadata = job_data.get("metadata") or {}
         progress_history = metadata.get("progress_history") or []
         last_progress = progress_history[-1] if progress_history else {}
         last_step = last_progress.get("message", "Unknown step")
+
+        # Who asked is a nicety; the terminal message is not. A Redis blip
+        # here must not take the whole cancellation notice down with it.
+        try:
+            requester = await arq_pool.get_job_cancel_requester(job_data.get("job_id", ""))
+        except Exception:
+            requester = None
+        # Rendered as plain text, so an underscore in a username would
+        # otherwise break the Markdown edit.
+        by_whom = f" as requested by {escape_markdown(requester)}" if requester else ""
 
         cancel_progress = {
             "current_step": "Cancelled",
@@ -431,7 +444,7 @@ async def _send_cancelled_notification(job_data: Dict[str, Any]) -> None:
 
         await _send_status_update(
             job_data,
-            f" Cancelled at: {last_step}",
+            f" Cancelled{by_whom} at: {last_step}",
             cancel_progress,
             metadata,
         )

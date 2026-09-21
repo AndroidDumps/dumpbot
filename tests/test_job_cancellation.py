@@ -67,9 +67,17 @@ async def test_in_flight_progress_cannot_replace_cancelled_text(redis_client):
     assert await queue.get_latest_status_text("job1") == "cancelled text"
 
 
+def _stub_requester(monkeypatch, name):
+    """Stub the Redis lookup of who asked for the cancellation."""
+    monkeypatch.setattr(
+        arq_config.arq_pool, "get_job_cancel_requester", AsyncMock(return_value=name)
+    )
+
+
 async def test_cancelled_notification_edits_the_progress_message(monkeypatch):
     queue = AsyncMock()
     monkeypatch.setattr(arq_jobs, "message_queue", queue)
+    _stub_requester(monkeypatch, None)
 
     job_data = {
         "job_id": "0bf549f22360d904",
@@ -103,6 +111,7 @@ async def test_aborted_job_marks_its_message_and_reraises(monkeypatch):
     monkeypatch.setattr(
         arq_config.arq_pool, "is_job_cancel_requested", AsyncMock(return_value=False)
     )
+    _stub_requester(monkeypatch, None)
     # Stand in for a cancel that lands inside the dump.
     monkeypatch.setattr(
         arq_jobs, "FirmwareDownloader", Mock(side_effect=asyncio.CancelledError)
@@ -120,3 +129,57 @@ async def test_aborted_job_marks_its_message_and_reraises(monkeypatch):
 
     assert job_data["metadata"]["status"] == "cancelled"
     assert "Firmware Dump Cancelled" in queue.send_status_update.await_args.kwargs["text"]
+
+
+async def test_cancelled_message_names_who_asked(monkeypatch):
+    """The message has to say who stopped the job, not just that it stopped."""
+    queue = AsyncMock()
+    monkeypatch.setattr(arq_jobs, "message_queue", queue)
+    _stub_requester(monkeypatch, "@some_user")
+
+    job_data = {
+        "job_id": "0bf549f22360d904",
+        "worker_id": "arq@0bf549f2",
+        "initial_message_id": 777,
+        "initial_chat_id": -100500,
+        "dump_args": {"url": "https://example.com/fw.zip", "use_privdump": False},
+        "metadata": {
+            "start_time": "2026-01-01T00:00:00+00:00",
+            "progress_history": [{"message": " Downloading firmware...", "percentage": 16.0}],
+        },
+    }
+
+    await arq_jobs._send_cancelled_notification(job_data)
+
+    text = queue.send_status_update.await_args.kwargs["text"]
+    # Underscores are escaped, otherwise the Markdown edit is rejected.
+    assert "as requested by @some\\_user" in text
+
+
+async def test_cancellation_notice_survives_a_requester_lookup_failure(monkeypatch):
+    """Losing the name must not cost us the cancellation notice itself."""
+    queue = AsyncMock()
+    monkeypatch.setattr(arq_jobs, "message_queue", queue)
+    monkeypatch.setattr(
+        arq_config.arq_pool,
+        "get_job_cancel_requester",
+        AsyncMock(side_effect=ConnectionError("redis down")),
+    )
+
+    job_data = {
+        "job_id": "0bf549f22360d904",
+        "worker_id": "arq@0bf549f2",
+        "initial_message_id": 777,
+        "initial_chat_id": -100500,
+        "dump_args": {"url": "https://example.com/fw.zip", "use_privdump": False},
+        "metadata": {
+            "start_time": "2026-01-01T00:00:00+00:00",
+            "progress_history": [{"message": " Downloading firmware...", "percentage": 16.0}],
+        },
+    }
+
+    await arq_jobs._send_cancelled_notification(job_data)
+
+    text = queue.send_status_update.await_args.kwargs["text"]
+    assert "Firmware Dump Cancelled" in text
+    assert "as requested by" not in text
