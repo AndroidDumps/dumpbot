@@ -5,9 +5,9 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-User=jenkins
-WorkingDirectory=/var/lib/jenkins/dumpbot
-ExecStart=/usr/bin/redis-server /var/lib/jenkins/dumpbot/redis.conf --daemonize no
+User=dumpbot
+WorkingDirectory=/home/dumpbot/dumpbot
+ExecStart=/usr/bin/redis-server /home/dumpbot/dumpbot/redis.conf --daemonize no
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

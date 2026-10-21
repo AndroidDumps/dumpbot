@@ -1,15 +1,15 @@
 # systemd units (system mode)
 
 Run dumpyarabot's redis, bot, and worker as **system-scope** systemd units
-(in `/etc/systemd/system/`, owned by root) running as `User=jenkins`. System
+(in `/etc/systemd/system/`, owned by root) running as `User=dumpbot`. System
 scope puts them in `/system.slice/` instead of `user@.service`'s cgroup,
 which keeps the firmware worker out of `systemd-oomd`'s PSI kill path (see
 [Why system-scope](#why-system-scope) below).
 
 ## Layout
 
-- `dumpyarabot-redis.service` — runs `redis-server /var/lib/jenkins/dumpbot/redis.conf`
-  on port 34790, loopback-only, persisting RDB to `/var/lib/jenkins/dumpbot-redis`.
+- `dumpyarabot-redis.service` — runs `redis-server /home/dumpbot/dumpbot/redis.conf`
+  on port 34790, loopback-only, persisting RDB to `/home/dumpbot/dumpbot-redis`.
 - `dumpyarabot-bot.service` — runs `python -m dumpyarabot` (the Telegram bot).
 - `dumpyarabot-worker@.service` — templated unit; `run_arq_worker.py worker_%i`
   (the ARQ job worker). `setup.sh` enables instances `@1` and `@2` by default.
@@ -17,12 +17,12 @@ which keeps the firmware worker out of `systemd-oomd`'s PSI kill path (see
 
 The units assume:
 
-- Code lives at `/var/lib/jenkins/dumpbot` (jenkins-owned).
-- A uv-managed venv exists at `/var/lib/jenkins/dumpbot/.venv` (`uv sync` creates it).
+- Code lives at `/home/dumpbot/dumpbot` (dumpbot-owned).
+- A uv-managed venv exists at `/home/dumpbot/dumpbot/.venv` (`uv sync` creates it).
 - A `.env` file in the working directory provides `TELEGRAM_BOT_TOKEN`,
   `DUMPER_TOKEN`, `REDIS_URL`, etc. (pydantic-settings reads it from cwd).
   `REDIS_URL` should point at `redis://127.0.0.1:34790/0` to match `redis.conf`.
-- A redis data directory at `/var/lib/jenkins/dumpbot-redis` (created by `setup.sh`).
+- A redis data directory at `/home/dumpbot/dumpbot-redis` (created by `setup.sh`).
 
 If any of those differ, edit the units / `redis.conf` before installing.
 
@@ -31,13 +31,13 @@ If any of those differ, edit the units / `redis.conf` before installing.
 Everything that touches `/etc/systemd/system/` needs root. There's a script:
 
 ```sh
-sudo /var/lib/jenkins/dumpbot/systemd/setup.sh
+sudo /home/dumpbot/dumpbot/systemd/setup.sh
 ```
 
 `setup.sh` is idempotent. It:
-1. Creates `/var/lib/jenkins/dumpbot-redis` (jenkins-owned) if missing.
+1. Creates `/home/dumpbot/dumpbot-redis` (dumpbot-owned) if missing.
 2. Migrates from a previous user-scope install (stops / disables / removes the
-   legacy units in `~jenkins/.config/systemd/user/`).
+   legacy units in `~dumpbot/.config/systemd/user/`).
 3. Symlinks the four unit files into `/etc/systemd/system/`.
 4. `daemon-reload`s.
 5. `enable --now`s `dumpyarabot.target` plus each `dumpyarabot-worker@N.service`.
@@ -51,8 +51,8 @@ is enough.
 Code changes (anything outside `systemd/`):
 
 ```sh
-# As jenkins (read-only git operation, file ownership stays correct):
-sudo -u jenkins git -C /var/lib/jenkins/dumpbot pull --ff-only
+# As dumpbot (read-only git operation, file ownership stays correct):
+sudo -u dumpbot git -C /home/dumpbot/dumpbot pull --ff-only
 sudo systemctl restart dumpyarabot.target
 ```
 

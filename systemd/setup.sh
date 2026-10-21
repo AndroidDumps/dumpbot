@@ -2,9 +2,9 @@
 # Install dumpyarabot's system-mode systemd units. Idempotent.
 #
 # Must be run as root (units live in /etc/systemd/system/, services run
-# as the `jenkins` user via User=jenkins in the unit). Typical:
+# as the `dumpbot` user via User=dumpbot in the unit). Typical:
 #
-#     sudo /var/lib/jenkins/dumpbot/systemd/setup.sh
+#     sudo /home/dumpbot/dumpbot/systemd/setup.sh
 #
 # Units are SYMLINKED from this checkout into /etc/systemd/system/ so
 # `git pull` updates them in place. Re-run setup.sh after a pull only
@@ -35,8 +35,8 @@ UNITS=(
 # dumpyarabot.target's Wants=) to run more workers in parallel.
 WORKER_INSTANCES=(1 2)
 
-RUN_USER="jenkins"
-REDIS_DATA_DIR="/var/lib/jenkins/dumpbot-redis"
+RUN_USER="dumpbot"
+REDIS_DATA_DIR="/home/dumpbot/dumpbot-redis"
 SYSTEM_UNIT_DIR="/etc/systemd/system"
 
 ok()   { printf '  \033[32mok\033[0m %s\n' "$*"; }
@@ -62,7 +62,7 @@ else
 fi
 
 # 2. Migrate from a previous USER-scope install, if present. The old
-# install left symlinks in ~jenkins/.config/systemd/user/ and used
+# install left symlinks in ~dumpbot/.config/systemd/user/ and used
 # `systemctl --user`. Stop & remove that whole arrangement before
 # installing the system units, to avoid two managers fighting.
 USER_UNIT_DIR="$(eval echo "~$RUN_USER")/.config/systemd/user"

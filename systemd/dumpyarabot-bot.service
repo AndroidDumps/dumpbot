@@ -7,10 +7,10 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-User=jenkins
-WorkingDirectory=/var/lib/jenkins/dumpbot
+User=dumpbot
+WorkingDirectory=/home/dumpbot/dumpbot
 # pydantic-settings reads `.env` from the working directory, so no EnvironmentFile needed.
-ExecStart=/var/lib/jenkins/dumpbot/.venv/bin/python -m dumpyarabot
+ExecStart=/home/dumpbot/dumpbot/.venv/bin/python -m dumpyarabot
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
