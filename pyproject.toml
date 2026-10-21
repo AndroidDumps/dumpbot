@@ -4,11 +4,11 @@ authors = [
 ]
 requires-python = "<4.0,>=3.10"
 dependencies = [
-    "dumpyara @ git+https://github.com/AndroidDumps/pydumpyara@e0b3c9d0ece0685ae51ed77d8b15cc380e31de43",
+    "dumpyara @ git+https://github.com/AndroidDumps/pydumpyara@339d9fe1cf877dfa02248ba01746e544a2526f03",
     "python-telegram-bot[job-queue]>=22.7,<23.0",
     "pydantic>=2.12.5,<3.0.0",
     "httpx>=0.28.1,<1.0.0",
-    "rich>=14.3.3,<15.0.0",
+    "rich>=15.0.0,<16.0.0",
     "pydantic-settings>=2.13.1,<3.0.0",
     "redis>=5.0.0,<6.0.0",
     "arq>=0.27.0,<1.0.0",
@@ -24,8 +24,8 @@ readme = "README.md"
 [dependency-groups]
 dev = [
     "black>=26.3.1,<27.0.0",
-    "mypy>=1.19.1,<2.0.0",
-    "isort>=8.0.1,<9.0.0",
+    "mypy>=2.4.0,<3.0.0",
+    "isort>=9.0.2,<10.0.0",
     "ruff>=0.15.8,<1.0.0",
     "autoflake>=2.3.3,<3.0.0",
     "pytest>=9.0.2,<10.0.0",
