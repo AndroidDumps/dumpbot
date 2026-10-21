@@ -4,7 +4,7 @@ authors = [
 ]
 requires-python = "<4.0,>=3.10"
 dependencies = [
-    "dumpyara @ git+https://github.com/AndroidDumps/pydumpyara@339d9fe1cf877dfa02248ba01746e544a2526f03",
+    "dumpyara @ git+https://github.com/AndroidDumps/pydumpyara@e31ffb9e9220a1a530706da83e3cfefe26e11187",
     "python-telegram-bot[job-queue]>=22.7,<23.0",
     "pydantic>=2.12.5,<3.0.0",
     "httpx>=0.28.1,<1.0.0",
