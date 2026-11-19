@@ -7,6 +7,9 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
+# Rich wraps log lines at 80 columns without a TTY, which truncates long
+# branch names and URLs in the journal.
+Environment=COLUMNS=1000
 User=dumpbot
 WorkingDirectory=/home/dumpbot/dumpbot
 # pydantic-settings reads `.env` from the working directory, so no EnvironmentFile needed.

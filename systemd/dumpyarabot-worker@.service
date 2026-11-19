@@ -8,6 +8,9 @@ StartLimitBurst=5
 
 [Service]
 User=dumpbot
+# Rich wraps log lines at 80 columns without a TTY, which truncates long
+# branch names and URLs in the journal.
+Environment=COLUMNS=1000
 # Worker shells out to uvx (~/.cargo/bin) and aria2c/7zz (~/.local/bin),
 # neither of which is on the default system PATH.
 Environment=PATH=/home/dumpbot/.cargo/bin:/home/dumpbot/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
