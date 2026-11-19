@@ -6,7 +6,7 @@ import os
 import signal
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, Dict, Any
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -252,6 +252,80 @@ async def run_command(
     finally:
         if process is not None:
             await _unregister_process_for_current_job(process.pid)
+
+
+async def run_command_with_input(
+    *args: str,
+    feed: Callable[[asyncio.StreamWriter], Awaitable[None]],
+    env: Optional[Dict[str, str]] = None,
+    timeout: Optional[float] = None,
+    description: Optional[str] = None,
+) -> None:
+    """Run a command whose stdin is streamed by ``feed``, failing on a non-zero exit.
+
+    stdout is discarded. On timeout, cancellation or an error in ``feed``,
+    the command's whole process tree is killed.
+
+    Args:
+        *args: Command and arguments.
+        feed: Coroutine function that writes the input to the given stream;
+            the stream is closed after it returns.
+        env: Environment variables to add or override.
+        timeout: Timeout in seconds for the whole run.
+        description: Human-readable description for logging.
+
+    Raises:
+        ProcessException: If the command exits non-zero or times out.
+    """
+    command = list(args)
+    log_desc = description or f"Running {command[0]}"
+    console.print(f"[blue]{log_desc}...[/blue]")
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, **(env or {})},
+        **_subprocess_spawn_kwargs(),
+    )
+    await _register_process_for_current_job(process.pid)
+
+    stdin, stderr_pipe = process.stdin, process.stderr
+    assert stdin is not None and stderr_pipe is not None
+
+    async def drive() -> Tuple[int, bytes]:
+        stderr = asyncio.ensure_future(stderr_pipe.read())
+        try:
+            await feed(stdin)
+            stdin.close()
+            await stdin.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The command exited early; its status says why.
+        return await process.wait(), await stderr
+
+    try:
+        returncode, stderr_bytes = await asyncio.wait_for(drive(), timeout)
+    except asyncio.TimeoutError:
+        _kill_process_tree(process)
+        await process.wait()
+        raise ProcessException(
+            f"Command timed out after {timeout}s: {' '.join(command)}",
+            ProcessResult(-1, stderr="Command timed out", command=command, timeout_occurred=True),
+        ) from None
+    except BaseException:
+        _kill_process_tree(process)
+        await process.wait()
+        raise
+    finally:
+        await _unregister_process_for_current_job(process.pid)
+
+    if returncode != 0:
+        stderr = stderr_bytes.decode(errors="replace")
+        raise ProcessException(
+            f"Command failed: {' '.join(command)} - {stderr.strip()}",
+            ProcessResult(returncode, stderr=stderr, command=command),
+        )
+    console.print(f"[green]{log_desc} completed successfully[/green]")
 
 
 async def run_command_with_file_output(

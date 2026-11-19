@@ -1,16 +1,28 @@
-"""Publish dumps by pushing them to bare git repositories served by cgit.
+"""Publish dumps into bare git repositories served by cgit.
 
 Repositories live at ``<REPO_ROOT>/dumps/<subgroup>/<repo>.git``. Existing
 ones may be symlinks to other storage and owned by another user.
+
+A dump is not pushed: parallel ``git fast-import`` processes write it as
+packs into a private object store, and those packs are then dropped straight
+into the target's ``objects/pack`` before the branch is updated. Every
+command on a repository gets an explicit ``--git-dir``, so git skips its
+ownership (safe.directory) check.
 """
 
+import asyncio
+import functools
+import heapq
 import os
 import re
 import secrets
 import shlex
 import shutil
+import stat
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Awaitable, Callable, Dict, Tuple
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -24,6 +36,7 @@ from dumpyarabot.process_utils import (
     ONE_HOUR,
     ProcessException,
     run_command,
+    run_command_with_input,
     run_git_command,
 )
 
@@ -33,19 +46,207 @@ console = Console()
 # single plain path component (no "/", ".", ".." or hidden names).
 REPO_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
-# Only receive-pack needs safe.directory: it is the one command that finds the
-# target repo by itself (from the path it is given) and so checks ownership,
-# and repos may be owned by another user. Commands given an explicit
-# --git-dir skip that check, and push only opens the work dir. A local push
-# clears GIT_CONFIG_PARAMETERS for receive-pack, so the -c goes into its
-# command (through a shell, hence the quoting). receive.autogc=false stops
-# pushes from starting a repack of a large repo; maintenance is left to the
-# server. core.hooksPath=/dev/null keeps hooks in a repo owned by someone else
-# from running as the bot.
-RECEIVE_PACK_COMMAND = (
-    "git -c 'safe.directory=*' -c receive.autogc=false"
-    " -c core.hooksPath=/dev/null receive-pack"
-)
+# Ref updates run the target's reference-transaction hook; repos may be owned
+# by someone else, so their hooks must not run as the bot.
+NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
+
+# Large files are streamed to fast-import in pieces of this size.
+READ_CHUNK = 1 << 20
+
+# Pack files in the order they are dropped into the target: git finds a pack
+# through its .idx, so that comes last and readers never see an incomplete one.
+PACK_SUFFIXES = (".pack", ".rev", ".idx")
+
+
+@dataclass
+class DumpFile:
+    """A file or symlink of the work dir to import as a blob.
+
+    Attributes:
+        path: Path relative to the work dir, as git records it.
+        source: Absolute path on disk.
+        mode: Git file mode: ``100644``, ``100755`` or ``120000``.
+        size: Size in bytes, used to balance the import processes.
+        link_target: For a symlink, its target text (the blob's content).
+    """
+
+    path: bytes
+    source: bytes
+    mode: str
+    size: int
+    link_target: bytes | None = None
+
+
+def collect_files(work_dir: Path, skip: Path) -> list[DumpFile]:
+    """List the files and symlinks of a dump the way ``git add -A`` would see them.
+
+    Any path component named ``.git`` (ignoring case) is left out, as git
+    does, and so are empty directories and anything that is not a regular
+    file or symlink. Symlinks are never followed. ``.gitignore`` files are
+    not honoured: everything is published.
+
+    Args:
+        work_dir: The dump's directory.
+        skip: A directory directly inside ``work_dir`` to leave out.
+
+    Returns:
+        The files found; unreadable directories are skipped with a warning.
+    """
+    files = []
+    skip_path = os.fsencode(skip)
+    pending = [(os.fsencode(work_dir), b"")]
+    while pending:
+        directory, prefix = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as e:
+            console.print(f"[yellow]Skipping unreadable directory {e.filename!r}: {e.strerror}[/yellow]")
+            continue
+        for entry in entries:
+            if entry.name.lower() == b".git" or entry.path == skip_path:
+                continue
+            path = prefix + entry.name
+            st = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(st.st_mode):
+                target = os.readlink(entry.path)
+                files.append(DumpFile(path, entry.path, "120000", len(target), target))
+            elif stat.S_ISDIR(st.st_mode):
+                pending.append((entry.path, path + b"/"))
+            elif stat.S_ISREG(st.st_mode):
+                # Like git, only the owner's execute bit counts.
+                mode = "100755" if st.st_mode & stat.S_IXUSR else "100644"
+                files.append(DumpFile(path, entry.path, mode, st.st_size))
+    return files
+
+
+def split_by_size(
+    blobs: list[tuple[int, DumpFile]], count: int
+) -> list[list[tuple[int, DumpFile]]]:
+    """Split ``(mark, file)`` pairs into ``count`` chunks of about equal total size.
+
+    Largest files go first, each to the currently lightest chunk.
+
+    Args:
+        blobs: Pairs to split.
+        count: Number of chunks; at least 1.
+
+    Returns:
+        The chunks; some are empty if there are fewer files than chunks.
+    """
+    chunks: list[list[tuple[int, DumpFile]]] = [[] for _ in range(count)]
+    loads = [(0, i) for i in range(count)]
+    for blob in sorted(blobs, key=lambda b: b[1].size, reverse=True):
+        load, i = heapq.heappop(loads)
+        chunks[i].append(blob)
+        heapq.heappush(loads, (load + blob[1].size, i))
+    return chunks
+
+
+def feed_bytes(data: bytes) -> Callable[[asyncio.StreamWriter], Awaitable[None]]:
+    """Make a stdin feeder for ``run_command_with_input`` that writes fixed data.
+
+    Args:
+        data: What to write.
+
+    Returns:
+        The feeder.
+    """
+
+    async def feed(stdin: asyncio.StreamWriter) -> None:
+        stdin.write(data)
+        await stdin.drain()
+
+    return feed
+
+
+async def feed_blobs(stdin: asyncio.StreamWriter, blobs: list[tuple[int, DumpFile]]) -> None:
+    """Stream ``blob`` commands for fast-import, reading files in pieces.
+
+    A file that cannot be opened is skipped with a warning, so it gets no
+    mark and is left out of the commit (like ``git add --ignore-errors``).
+
+    Args:
+        stdin: fast-import's standard input.
+        blobs: ``(mark, file)`` pairs to import.
+
+    Raises:
+        OSError: If a file cannot be read or shrinks while being read.
+    """
+    for mark, file in blobs:
+        if file.link_target is not None:
+            stdin.write(b"blob\nmark :%d\ndata %d\n%s\n" % (mark, file.size, file.link_target))
+            await stdin.drain()
+            continue
+        try:
+            handle = await asyncio.to_thread(open, file.source, "rb")
+        except OSError as e:
+            console.print(f"[yellow]Skipping unreadable file {file.path!r}: {e.strerror}[/yellow]")
+            continue
+        with handle:
+            remaining = os.fstat(handle.fileno()).st_size
+            stdin.write(b"blob\nmark :%d\ndata %d\n" % (mark, remaining))
+            while remaining:
+                data = await asyncio.to_thread(handle.read, min(READ_CHUNK, remaining))
+                if not data:
+                    raise OSError(f"{file.path!r} shrank while being imported")
+                stdin.write(data)
+                remaining -= len(data)
+                await stdin.drain()
+        stdin.write(b"\n")
+
+
+def same_filesystem(a: Path, b: Path) -> bool:
+    """Tell whether two existing paths are on the same filesystem.
+
+    Args:
+        a: First path.
+        b: Second path.
+
+    Returns:
+        True if both are on the same device, so files can be hard-linked.
+    """
+    return os.stat(a).st_dev == os.stat(b).st_dev
+
+
+def drop_packs(source: Path, target: Path) -> int:
+    """Hard-link or copy every pack of ``source`` into the pack dir ``target``.
+
+    All ``.pack`` files go in first, then ``.rev``, then ``.idx``. Packs are
+    hard-linked on the same filesystem; otherwise each file is copied to a
+    ``tmp_`` name (which ``git gc`` cleans up if left behind), synced and
+    renamed. A pack whose name already exists in ``target`` is skipped, since
+    names are content hashes. Nothing is ever removed again: another worker
+    may already rely on a pack with the same name, and an unreferenced pack
+    is harmless garbage.
+
+    Args:
+        source: The private store's ``objects/pack`` dir.
+        target: The target repository's (resolved) ``objects/pack`` dir.
+
+    Returns:
+        The number of packs added to ``target``.
+
+    Raises:
+        OSError: If a file cannot be linked or copied.
+    """
+    link = same_filesystem(source, target)
+    names = [p.stem for p in sorted(source.glob("pack-*.pack"))]
+    names = [n for n in names if not (target / f"{n}.pack").exists()]
+    for suffix in PACK_SUFFIXES:
+        for name in names:
+            src, dst = source / f"{name}{suffix}", target / f"{name}{suffix}"
+            if not src.exists():
+                continue
+            if link:
+                os.link(src, dst)
+            else:
+                tmp = target / f"tmp_{secrets.token_hex(8)}{suffix}"
+                with open(src, "rb") as fin, open(tmp, "xb") as fout:
+                    shutil.copyfileobj(fin, fout, READ_CHUNK)
+                    fout.flush()
+                    os.fsync(fout.fileno())
+                os.rename(tmp, dst)
+    return len(names)
 
 
 class RepoPublishError(Exception):
@@ -157,7 +358,7 @@ def repo_web_url(repo_path: str, branch: str) -> str:
 
 
 class RepoManager:
-    """Commit a dump and push it to its bare repository."""
+    """Commit a dump and publish it into its bare repository."""
 
     def __init__(self, work_dir: str):
         """Create a manager for one dump.
@@ -175,12 +376,14 @@ class RepoManager:
         device_props: Dict[str, Any],
         force: bool = False,
     ) -> Tuple[str, str]:
-        """Commit the work dir and push it, creating the repository if needed.
+        """Commit the work dir and publish it, creating the repository if needed.
 
         Existing subgroups and repositories are matched ignoring case and their
-        on-disk names are used. After the push, HEAD is pointed at the branch,
-        the clone indexes are rebuilt and, for a new repository, the cgit repo
-        list is refreshed.
+        on-disk names are used. The dump is imported into a private object
+        store inside the work dir, its packs are dropped into the repository
+        and the branch is updated atomically. Then HEAD is pointed at the
+        branch, the clone indexes are rebuilt and, for a new repository, the
+        cgit repo list is refreshed.
 
         Args:
             device_props: Uses ``repo_subgroup``, ``repo_name``, ``branch`` and
@@ -193,7 +396,7 @@ class RepoManager:
         Raises:
             InvalidRepoNameError: If a name is not a safe path component.
             BranchAlreadyExistsError: If the branch exists (or another worker
-                pushed it meanwhile) and ``force`` is False.
+                published it meanwhile) and ``force`` is False.
             RepoPublishError: If a git or filesystem step fails; the details
                 are logged, not included in the message.
         """
@@ -221,23 +424,25 @@ class RepoManager:
         console.print(f"[blue]Target repository: {bare_repo}[/blue]")
 
         step = "checking the branch"
+        store = None
         try:
-            if await self._branch_exists(bare_repo, branch):
+            if await self._branch_tip(bare_repo, branch):
                 if not force:
                     raise BranchAlreadyExistsError(branch, repo_url, repo_path)
-                console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
+                console.print(f"[yellow]Branch {branch} exists, replacing it[/yellow]")
 
-            step = "committing the dump"
-            await self._setup_git_repository(branch, description)
+            step = "importing the dump"
+            store = Path(tempfile.mkdtemp(prefix=".publish-", dir=self.work_dir))
+            commit = await self._import(store, description)
             step = "creating the repository"
             created = await self._ensure_bare_repo(bare_repo, branch)
-            step = "pushing the dump"
+            step = "publishing the dump"
             try:
-                await self._push(bare_repo, branch, force=force)
+                await self._publish(store, bare_repo, branch, commit, force)
             except ProcessException:
-                # Another worker may have pushed the same branch since the check
-                # above; git then rejects our unrelated history.
-                if not force and await self._branch_exists(bare_repo, branch):
+                # Another worker may have published the same branch since the
+                # check above.
+                if not force and await self._branch_tip(bare_repo, branch):
                     raise BranchAlreadyExistsError(branch, repo_url, repo_path) from None
                 raise
         except (ProcessException, RuntimeError, OSError) as e:
@@ -247,30 +452,152 @@ class RepoManager:
             raise RepoPublishError(
                 f"Publishing the dump failed while {step}; details are in the worker log."
             ) from None
+        finally:
+            if store is not None:
+                shutil.rmtree(store, ignore_errors=True)
 
         await self._set_default_branch(bare_repo, branch)
         await self._rebuild_indexes(bare_repo)
         if created:
             await self._refresh_repolist()
 
-        console.print(f"[green]Successfully pushed to: {repo_url}[/green]")
+        console.print(f"[green]Successfully published to: {repo_url}[/green]")
         return repo_url, repo_path
 
-    async def _branch_exists(self, bare_repo: Path, branch: str) -> bool:
-        """Check whether ``refs/heads/<branch>`` exists in the bare repository.
+    async def _import(self, store: Path, description: str) -> str:
+        """Write the work dir as a commit into a new private object store.
+
+        Files are split into ``REPO_IMPORT_JOBS`` size-balanced chunks, each
+        imported by its own ``git fast-import`` straight into a pack.
+        ``fastimport.unpackLimit=0`` keeps even small imports as packs, and
+        ``core.bigFileThreshold=1`` skips delta search. The tree and commit
+        are then built from the marks and packed too, and the store is
+        checked to hold everything the commit needs, in packs only.
+
+        Args:
+            store: An empty directory on the work dir's filesystem.
+            description: Commit message.
+
+        Returns:
+            The commit's object id.
+
+        Raises:
+            ProcessException: If a git command fails, including the final
+                fsck when the store is missing objects.
+            OSError: If a file cannot be read.
+        """
+        git_dir = f"--git-dir={store}"
+        await run_git_command("init", "--quiet", "--bare", str(store), description="Creating object store")
+
+        files = await asyncio.to_thread(collect_files, self.work_dir, store)
+        jobs = max(1, min(settings.REPO_IMPORT_JOBS, len(files)))
+        console.print(f"[blue]Importing {len(files)} files with {jobs} processes...[/blue]")
+        marks = [store / f"marks-{i}" for i in range(jobs)]
+        numbered = list(enumerate(files, start=1))
+        await asyncio.gather(*(
+            run_command_with_input(
+                "git", "-c", "core.bigFileThreshold=1", "-c", "fastimport.unpackLimit=0",
+                git_dir, "fast-import", "--quiet", f"--export-marks={marks[i]}",
+                feed=functools.partial(feed_blobs, blobs=chunk),
+                timeout=ONE_HOUR,
+                description=f"Importing files ({i + 1}/{jobs})",
+            )
+            for i, chunk in enumerate(split_by_size(numbered, jobs))
+        ))
+
+        object_ids = {}
+        for path in marks:
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    mark, oid = line.split()
+                    object_ids[int(mark[1:])] = oid
+        index_info = b"".join(
+            b"%s %s\t%s\0" % (f.mode.encode(), object_ids[k].encode(), f.path)
+            for k, f in numbered if k in object_ids
+        )
+        index_env = {"GIT_INDEX_FILE": str(store / "index")}
+        await run_command_with_input(
+            "git", git_dir, "update-index", "-z", "--index-info",
+            feed=feed_bytes(index_info), env=index_env, timeout=HALF_HOUR, description="Building the index",
+        )
+        tree = (await run_command(
+            "git", git_dir, "write-tree",
+            env=index_env, check=True, timeout=HALF_HOUR, description="Writing the tree",
+        )).stdout.strip()
+        identity = f"dumper <dumper@{self.commit_host}>"
+        commit = (await run_git_command(
+            "-c", "user.name=dumper", "-c", f"user.email=dumper@{self.commit_host}",
+            git_dir, "commit-tree", tree,
+            "-m", description, "-m", f"Signed-off-by: {identity}",
+            description="Committing the dump",
+        )).stdout.strip()
+
+        # Pack every reachable object not yet in a pack (the trees and the
+        # commit), then drop the loose copies, so the fsck below proves that
+        # the packs alone hold the whole commit.
+        await run_command_with_input(
+            "git", git_dir, "pack-objects", "--revs", "--unpacked", "--window=0", "--quiet",
+            str(store / "objects" / "pack" / "pack"),
+            feed=feed_bytes(f"{commit}\n".encode()), timeout=HALF_HOUR, description="Packing trees and commit",
+        )
+        await run_git_command(git_dir, "prune-packed", description="Removing packed loose objects")
+        await run_git_command(
+            git_dir, "fsck", "--connectivity-only", "--no-dangling", "--no-progress", commit,
+            timeout=HALF_HOUR, description="Checking the imported dump",
+        )
+        return commit
+
+    async def _publish(
+        self, store: Path, bare_repo: Path, branch: str, commit: str, force: bool
+    ) -> None:
+        """Drop the store's packs into the repository and point the branch at ``commit``.
+
+        The branch is updated with an expected old value, so a concurrent
+        update makes this fail instead of being overwritten: without
+        ``force`` the branch must not exist; with it, it must still have the
+        value read just before. If the update fails, the dropped packs stay
+        behind unreferenced (see ``drop_packs``).
+
+        Args:
+            store: The private object store holding the commit.
+            bare_repo: Target repository; may be a symlink to other storage.
+            branch: Target branch.
+            commit: Commit to publish.
+            force: Replace the branch if it exists.
+
+        Raises:
+            ProcessException: If the ref update fails, e.g. because the branch
+                exists or changed meanwhile.
+            OSError: If the packs cannot be dropped.
+        """
+        target = bare_repo.resolve() / "objects" / "pack"
+        added = await asyncio.to_thread(drop_packs, store / "objects" / "pack", target)
+        old = await self._branch_tip(bare_repo, branch) if force else ""
+        try:
+            await run_git_command(
+                *NO_HOOKS, f"--git-dir={bare_repo}",
+                "update-ref", f"refs/heads/{branch}", commit, old,
+                description="Updating the branch",
+            )
+        except ProcessException:
+            console.print(f"[yellow]Branch update failed; leaving {added} unreferenced pack(s)[/yellow]")
+            raise
+
+    async def _branch_tip(self, bare_repo: Path, branch: str) -> str:
+        """Read the commit ``refs/heads/<branch>`` points at.
 
         Args:
             bare_repo: The bare repository; may not exist yet.
             branch: Branch name.
 
         Returns:
-            True if the branch exists; False if it or the repository does not.
+            The commit id, or "" if the branch or the repository does not exist.
 
         Raises:
             RuntimeError: If git cannot tell (e.g. a broken repository).
         """
         if not bare_repo.exists():
-            return False
+            return ""
 
         result = await run_git_command(
             f"--git-dir={bare_repo}",
@@ -279,7 +606,7 @@ class RepoManager:
             description="Checking whether branch exists",
         )
         if result.returncode in (0, 1):
-            return result.returncode == 0
+            return result.stdout.strip()
         raise RuntimeError(
             f"Could not check branch '{branch}' in {bare_repo}: "
             f"git exited {result.returncode}: {result.stderr.strip()}"
@@ -331,92 +658,6 @@ class RepoManager:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
 
-    async def _setup_git_repository(self, branch: str, description: str) -> None:
-        """Commit the work dir as the first commit of a new local repository.
-
-        Args:
-            branch: Initial branch name.
-            description: Commit message.
-
-        Raises:
-            ProcessException: If a git command fails.
-        """
-        console.print("[blue]Setting up git repository...[/blue]")
-
-        # Initialize git repository
-        await run_git_command(
-            "init", "--initial-branch", branch,
-            cwd=self.work_dir,
-            description="Initializing git repository"
-        )
-
-        # Configure git user
-        await run_git_command(
-            "config", "user.name", "dumper",
-            cwd=self.work_dir,
-            description="Configuring git user name"
-        )
-
-        await run_git_command(
-            "config", "user.email", f"dumper@{self.commit_host}",
-            cwd=self.work_dir,
-            description="Configuring git user email"
-        )
-
-        # The work dir is thrown away after the push: don't let the commit
-        # start an automatic repack of it, and skip delta search when packing
-        # for the push (firmware binaries gain little from it; it was the
-        # main CPU cost).
-        for key, value in (("gc.auto", "0"), ("pack.window", "0")):
-            await run_git_command(
-                "config", key, value,
-                cwd=self.work_dir,
-                description=f"Setting {key}",
-            )
-
-        # Add all files
-        console.print("[blue]Adding files to git...[/blue]")
-        await run_git_command(
-            "add", "--ignore-errors", "-A",
-            cwd=self.work_dir,
-            timeout=ONE_HOUR,
-            description="Adding files to git"
-        )
-
-        # Commit files
-        console.print("[blue]Committing files...[/blue]")
-        await run_git_command(
-            "commit", "--quiet", "--signoff", "--message", description,
-            cwd=self.work_dir,
-            timeout=HALF_HOUR,
-            description="Committing files"
-        )
-
-        console.print("[green]Git repository setup completed[/green]")
-
-    async def _push(self, bare_repo: Path, branch: str, force: bool = False) -> None:
-        """Push the work dir's HEAD to ``refs/heads/<branch>`` of the bare repository.
-
-        Args:
-            bare_repo: Target repository.
-            branch: Target branch.
-            force: Overwrite the branch.
-
-        Raises:
-            ProcessException: If the push fails.
-        """
-        push_args = ["push", f"--receive-pack={RECEIVE_PACK_COMMAND}"]
-        if force:
-            push_args.append("--force")
-        push_args.extend([str(bare_repo.absolute()), f"HEAD:refs/heads/{branch}"])
-
-        await run_git_command(
-            *push_args,
-            cwd=self.work_dir,
-            timeout=ONE_HOUR,
-            description="Pushing to repository"
-        )
-
     async def _set_default_branch(self, bare_repo: Path, branch: str) -> None:
         """Make ``branch`` the default branch shown by cgit; failure only warns.
 
@@ -425,7 +666,7 @@ class RepoManager:
             branch: Branch to make the default.
         """
         result = await run_git_command(
-            f"--git-dir={bare_repo}",
+            *NO_HOOKS, f"--git-dir={bare_repo}",
             "symbolic-ref", "HEAD", f"refs/heads/{branch}",
             check=False,
             description=f"Setting default branch to {branch}",
@@ -439,10 +680,10 @@ class RepoManager:
         Args:
             bare_repo: The bare repository.
         """
-        result = await run_command(
-            settings.REPO_INDEX_GIT_BINARY,
+        result = await run_git_command(
             f"--git-dir={bare_repo}",
             "multi-pack-index", "write", "--bitmap",
+            check=False,
             timeout=ONE_HOUR,
             description="Rebuilding multi-pack index",
         )

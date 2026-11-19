@@ -56,11 +56,11 @@ class Settings(BaseSettings):
 
     # Bare dump repos (served by cgit) live at <REPO_ROOT>/dumps/<subgroup>/<repo>.git.
     REPO_ROOT: str
-    # git that rebuilds the multi-pack index + bitmap after each push.
-    REPO_INDEX_GIT_BINARY: str = "git"
+    # Parallel git fast-import processes that hash and compress a dump.
+    REPO_IMPORT_JOBS: int = 16
     # Regenerates the cgit repo list after a repo is created; empty disables it.
     CGIT_REPOLIST_COMMAND: str = ""
-    # Public cgit base URL for links to pushed branches.
+    # Public cgit base URL for links to published branches.
     REPO_PUBLIC_BASE_URL: str = "https://dumps.tadiphone.dev"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

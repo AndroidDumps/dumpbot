@@ -29,7 +29,7 @@ The dump worker system provides a scalable, fault-tolerant alternative to Jenkin
 ```
 User Command → Validation → Job Queue → Worker → Processing → Completion
      ↓              ↓           ↓          ↓          ↓           ↓
-  /dump URL    DumpArguments  Redis    Worker   Extraction   git Push
+  /dump URL    DumpArguments  Redis    Worker   Extraction   git Publish
                    ↓              ↓         ↓          ↓           ↓
               Job Creation    Job Storage  Process   Progress   Notification
 ```
@@ -41,7 +41,7 @@ User Command → Validation → Job Queue → Worker → Processing → Completi
 - **Dual extraction** methods (Python dumpyara + alternative dumper)
 - **Comprehensive property extraction** with extensive fallback logic
 - **Boot image processing** with device tree extraction
-- **Local git push** to bare repos served by cgit (created on demand)
+- **Local git publish**: parallel `git fast-import` into packs that are dropped into bare repos served by cgit (created on demand); `REPO_IMPORT_JOBS` sets the parallelism
 - **Cross-chat messaging** with status updates
 - **Channel notifications** for whitelisted firmware
 
@@ -184,7 +184,7 @@ REDIS_KEY_PREFIX=dumpyarabot:
 
 # Dump repositories (bare repos served by cgit); only REPO_ROOT is required
 REPO_ROOT=/srv/git
-REPO_INDEX_GIT_BINARY=git
+REPO_IMPORT_JOBS=16
 CGIT_REPOLIST_COMMAND=/path/to/cgit-repolist
 REPO_PUBLIC_BASE_URL=https://dumps.tadiphone.dev
 
@@ -261,7 +261,7 @@ Jobs automatically retry on failure with exponential backoff:
 
 1. **Download failures**: Mirror optimization and tool fallbacks
 2. **Extraction failures**: Dual extraction method support
-3. **Push failures**: git error output from the local push
+3. **Publish failures**: git error output from the import or the branch update
 4. **Worker crashes**: Job requeue for other workers
 5. **Network issues**: Configurable timeouts and retries
 6. **Existing branch**: The job stops and the Telegram message includes a link to the existing dump.
@@ -339,7 +339,7 @@ redis-cli KEYS "arq:in-progress:*"
 redis-cli ZREM "dumpyarabot:arq_jobs" "<job_id>"
 ```
 
-#### Repository push failures
+#### Repository publish failures
 ```bash
 # The worker user needs write access to the repo, and to its target if it is a symlink
 ls -ld "$(realpath "$REPO_ROOT/dumps/<subgroup>/<repo>.git")"
@@ -360,13 +360,13 @@ Worker logs include:
 - Job assignment and progress
 - Download mirror selection
 - Extraction method decisions
-- Repository push and cgit refresh
+- Repository publish and cgit refresh
 - Error details with stack traces
 
 ## Security Considerations
 
 ### Access Control
-- Workers push with the bot user's filesystem permissions under REPO_ROOT
+- Workers publish with the bot user's filesystem permissions under REPO_ROOT
 - Jobs run with worker process permissions
 - Temporary files isolated per job
 - No credential storage in job data
