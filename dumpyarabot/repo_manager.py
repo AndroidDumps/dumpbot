@@ -48,6 +48,14 @@ RECEIVE_PACK_COMMAND = (
 )
 
 
+class RepoPublishError(Exception):
+    """Publishing a dump to its repository failed.
+
+    The message names only the failed step: it is shown to Telegram users,
+    while the git command and paths are logged on the worker instead.
+    """
+
+
 class InvalidRepoNameError(ValueError):
     """Raised when a subgroup or repository name is not a safe path component."""
 
@@ -186,9 +194,8 @@ class RepoManager:
             InvalidRepoNameError: If a name is not a safe path component.
             BranchAlreadyExistsError: If the branch exists (or another worker
                 pushed it meanwhile) and ``force`` is False.
-            ProcessException: If a git command fails.
-            RuntimeError: If the repository path is a dangling symlink or the
-                branch check fails.
+            RepoPublishError: If a git or filesystem step fails; the details
+                are logged, not included in the message.
         """
         repo_subgroup = device_props["repo_subgroup"]
         repo_name = device_props["repo_name"]
@@ -213,21 +220,33 @@ class RepoManager:
         bare_repo = org_dir / repo_subgroup / f"{repo_name}.git"
         console.print(f"[blue]Target repository: {bare_repo}[/blue]")
 
-        if await self._branch_exists(bare_repo, branch):
-            if not force:
-                raise BranchAlreadyExistsError(branch, repo_url, repo_path)
-            console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
-
-        await self._setup_git_repository(branch, description)
-        created = await self._ensure_bare_repo(bare_repo, branch)
+        step = "checking the branch"
         try:
-            await self._push(bare_repo, branch, force=force)
-        except ProcessException:
-            # Another worker may have pushed the same branch since the check
-            # above; git then rejects our unrelated history.
-            if not force and await self._branch_exists(bare_repo, branch):
-                raise BranchAlreadyExistsError(branch, repo_url, repo_path) from None
-            raise
+            if await self._branch_exists(bare_repo, branch):
+                if not force:
+                    raise BranchAlreadyExistsError(branch, repo_url, repo_path)
+                console.print(f"[yellow]Branch {branch} exists, force-pushing replacement[/yellow]")
+
+            step = "committing the dump"
+            await self._setup_git_repository(branch, description)
+            step = "creating the repository"
+            created = await self._ensure_bare_repo(bare_repo, branch)
+            step = "pushing the dump"
+            try:
+                await self._push(bare_repo, branch, force=force)
+            except ProcessException:
+                # Another worker may have pushed the same branch since the check
+                # above; git then rejects our unrelated history.
+                if not force and await self._branch_exists(bare_repo, branch):
+                    raise BranchAlreadyExistsError(branch, repo_url, repo_path) from None
+                raise
+        except (ProcessException, RuntimeError, OSError) as e:
+            # Git errors carry the command line and server paths: log them here,
+            # and keep them out of the message (and traceback) users see.
+            console.print(f"[red]Repository step failed while {step}: {e}[/red]")
+            raise RepoPublishError(
+                f"Publishing the dump failed while {step}; details are in the worker log."
+            ) from None
 
         await self._set_default_branch(bare_repo, branch)
         await self._rebuild_indexes(bare_repo)

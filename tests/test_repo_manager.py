@@ -17,6 +17,7 @@ from dumpyarabot.repo_manager import (
     BranchAlreadyExistsError,
     InvalidRepoNameError,
     RepoManager,
+    RepoPublishError,
     repo_web_url,
 )
 
@@ -206,6 +207,36 @@ async def test_push_new_repo_then_second_branch(tmp_path, repo_settings):
     assert _ref(bare)  # first branch kept
     assert _git(f"--git-dir={bare}", "symbolic-ref", "HEAD") == "refs/heads/newer-build"
     assert marker.read_text() == "ran\n"  # existing repo: list not refreshed
+
+
+@pytest.mark.parametrize(
+    "break_repo, step",
+    [
+        ("not-a-repo", "checking the branch"),
+        ("read-only-refs", "pushing the dump"),
+    ],
+)
+async def test_repo_failures_hide_git_details(tmp_path, repo_settings, break_repo, step):
+    """A failing git step reports only the step, never the command or paths."""
+    root, _ = repo_settings
+    bare = root / "dumps" / "motorola" / "lagos.git"
+    if break_repo == "not-a-repo":
+        bare.mkdir(parents=True)
+    else:
+        _init_bare(bare)
+        (bare / "refs" / "heads").chmod(0o555)
+
+    try:
+        with pytest.raises(RepoPublishError) as excinfo:
+            await _dump(tmp_path, "broken")
+    finally:
+        if break_repo == "read-only-refs":
+            (bare / "refs" / "heads").chmod(0o755)
+
+    message = str(excinfo.value)
+    assert step in message
+    assert str(tmp_path) not in message and "git " not in message
+    assert excinfo.value.__suppress_context__
 
 
 async def test_existing_branch_needs_force(tmp_path, repo_settings):
