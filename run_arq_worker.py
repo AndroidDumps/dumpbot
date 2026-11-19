@@ -34,6 +34,10 @@ from dumpyarabot.message_queue import message_queue
 
 console = Console()
 
+# Exit status after a drain (SIGUSR1 / `systemctl reload`): the unit restarts
+# the worker on it without counting it as a failure.
+DRAIN_EXIT_CODE = 75
+
 
 class ARQWorkerManager:
     """Manages ARQ worker lifecycle with graceful shutdown."""
@@ -43,6 +47,8 @@ class ARQWorkerManager:
         self.worker: Optional[arq.Worker] = None
         self.bot: Optional[Bot] = None
         self.shutdown_event = asyncio.Event()
+        self.draining = False
+        self.exit_code = 0
 
     async def start_worker(self):
         """Start the ARQ worker."""
@@ -120,6 +126,38 @@ class ARQWorkerManager:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
+        loop = asyncio.get_running_loop()
+
+        def drain_handler(signum, frame):
+            loop.call_soon_threadsafe(self.request_drain)
+
+        signal.signal(signal.SIGUSR1, drain_handler)
+
+    def request_drain(self) -> None:
+        """Stop taking new jobs, then exit once the running ones finish.
+
+        Used to reload the code without cancelling an in-flight dump: systemd
+        restarts the worker when it exits with ``DRAIN_EXIT_CODE``.
+        """
+        if self.draining or self.worker is None:
+            return
+        self.draining = True
+        self.worker.allow_pick_jobs = False
+        running = sum(not t.done() for t in self.worker.tasks.values())
+        console.print(
+            f"[yellow]Draining worker {self.worker_name}: no new jobs, "
+            f"waiting for {running} running job(s)[/yellow]"
+        )
+        asyncio.get_running_loop().create_task(self._finish_drain())
+
+    async def _finish_drain(self) -> None:
+        """Wait for the running jobs to finish, then trigger shutdown."""
+        while any(not t.done() for t in self.worker.tasks.values()):
+            await asyncio.sleep(1)
+        console.print(f"[yellow]Worker {self.worker_name} drained, exiting for reload[/yellow]")
+        self.exit_code = DRAIN_EXIT_CODE
+        self.shutdown_event.set()
+
     async def shutdown(self):
         """Gracefully shutdown the worker."""
         console.print(f"[yellow]Shutting down worker {self.worker_name}...[/yellow]")
@@ -152,6 +190,9 @@ async def main():
         sys.exit(1)
     finally:
         await manager.shutdown()
+
+    if manager.exit_code:
+        sys.exit(manager.exit_code)
 
 
 if __name__ == "__main__":

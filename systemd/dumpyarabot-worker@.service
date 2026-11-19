@@ -15,6 +15,11 @@ WorkingDirectory=/home/dumpbot/dumpbot
 ExecStart=/home/dumpbot/dumpbot/.venv/bin/python run_arq_worker.py worker_%i
 Restart=on-failure
 RestartSec=10
+# `systemctl reload` drains: the worker stops taking jobs, finishes the
+# running dump, and exits 75. Restart it then, without counting a failure.
+ExecReload=/bin/kill -USR1 $MAINPID
+SuccessExitStatus=75
+RestartForceExitStatus=75
 # Worker's job_timeout is 7200s (2h). Give it that plus a minute of grace
 # so systemd lets an in-flight dump drain on SIGTERM instead of SIGKILLing
 # mid-extraction.

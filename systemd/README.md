@@ -53,10 +53,16 @@ Code changes (anything outside `systemd/`):
 ```sh
 # As dumpbot (read-only git operation, file ownership stays correct):
 sudo -u dumpbot git -C /home/dumpbot/dumpbot pull --ff-only
-sudo systemctl restart dumpyarabot.target
+# Workers: drain, so in-flight dumps finish instead of being cancelled. Each
+# worker stops taking jobs, finishes its running dump, exits 75 and is
+# restarted on the new code; idle workers restart at once.
+sudo systemctl reload 'dumpyarabot-worker@*'
+sudo systemctl restart dumpyarabot-bot.service
 ```
 
-Unit-file changes also need `sudo systemctl daemon-reload` first.
+`restart dumpyarabot.target` still works but cancels running dumps (they are
+retried from scratch). Unit-file changes also need `sudo systemctl
+daemon-reload` first.
 
 The worker carries `TimeoutStopSec=7260` (2h + 1min). On SIGTERM the worker
 propagates a `CancelledError` into the running job, which lets `process_utils`
