@@ -20,7 +20,7 @@ The units assume:
 - Code lives at `/home/dumpbot/dumpbot` (dumpbot-owned).
 - A uv-managed venv exists at `/home/dumpbot/dumpbot/.venv` (`uv sync` creates it).
 - A `.env` file in the working directory provides `TELEGRAM_BOT_TOKEN`,
-  `DUMPER_TOKEN`, `REDIS_URL`, etc. (pydantic-settings reads it from cwd).
+  `REDIS_URL`, etc. (pydantic-settings reads it from cwd).
   `REDIS_URL` should point at `redis://127.0.0.1:34790/0` to match `redis.conf`.
 - A redis data directory at `/home/dumpbot/dumpbot-redis` (created by `setup.sh`).
 
@@ -89,7 +89,7 @@ Default install enables `@1` and `@2`. To change the count:
 2. Update `dumpyarabot.target`'s `Wants=`/`After=` to list each instance.
 3. Re-run `setup.sh`.
 
-Both instances share the same `WORK_DIR_BASE` (typically `/dumps3/bot/`) —
+Both instances share the same `WORK_DIR_BASE` (a scratch dir on a large disk) —
 per-job subdirs are uniquely named (`dump_<jobid>_<rand>/`) so they don't
 collide. On startup each worker sweeps stale `dump_*` dirs from a previous
 crash; see `on_startup` in `dumpyarabot/arq_config.py`.

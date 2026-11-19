@@ -19,12 +19,6 @@ from dumpyarabot.aria2_manager import DownloadProgress
 from dumpyarabot.config import settings
 from dumpyarabot.firmware_downloader import FirmwareDownloader
 from dumpyarabot.firmware_extractor import FirmwareExtractor
-from dumpyarabot.gitlab_manager import (
-    GITLAB_BASE_URL,
-    BranchAlreadyExistsError,
-    GitLabManager,
-    gitlab_http_client,
-)
 from dumpyarabot.message_formatting import (
     format_comprehensive_progress_message,
     format_download_progress,
@@ -32,6 +26,7 @@ from dumpyarabot.message_formatting import (
 from dumpyarabot.message_queue import message_queue
 from dumpyarabot.process_utils import reset_current_job_id, set_current_job_id
 from dumpyarabot.property_extractor import PropertyExtractor
+from dumpyarabot.repo_manager import BranchAlreadyExistsError, RepoManager
 from dumpyarabot.schemas import DumpJob
 
 console = Console()
@@ -455,16 +450,15 @@ async def _send_cancelled_notification(job_data: Dict[str, Any]) -> None:
         console.print(f"[red]Failed to send cancellation notice: {e}[/red]")
 
 
-async def _validate_gitlab_access() -> None:
-    """Validate GitLab server access - from original worker logic."""
-    try:
-        async with gitlab_http_client() as client:
-            response = await client.get(GITLAB_BASE_URL, timeout=10.0)
-            if response.status_code >= 400:
-                raise Exception(f"GitLab server returned {response.status_code}")
-            console.print("[green]GitLab server access validated[/green]")
-    except Exception as e:
-        raise Exception(f"Cannot access GitLab server: {e}")
+def _validate_repo_root() -> None:
+    """Fail before downloading if ``<REPO_ROOT>/dumps`` is missing.
+
+    Raises:
+        Exception: If it is not a directory.
+    """
+    org_dir = Path(settings.REPO_ROOT) / "dumps"
+    if not org_dir.is_dir():
+        raise Exception(f"Dump repository root is not a directory: {org_dir}")
 
 
 async def update_progress_with_metadata(
@@ -499,7 +493,15 @@ async def update_progress_with_metadata(
 
 
 async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]:
-    """ARQ job with integrated metadata tracking."""
+    """Download, extract and publish one firmware dump (ARQ job).
+
+    Args:
+        ctx: ARQ job context.
+        job_data: Serialized job.
+
+    Returns:
+        The job result, with ``success`` and ``metadata``.
+    """
     job_id = job_data["job_id"]
     console.print(f"[blue]ARQ processing job {job_id}[/blue]")
     job_token = None
@@ -575,15 +577,15 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 downloader = FirmwareDownloader(str(work_dir))
                 extractor = FirmwareExtractor(str(work_dir))
                 prop_extractor = PropertyExtractor(str(work_dir))
-                gitlab_manager = GitLabManager(str(work_dir))
+                repo_manager = RepoManager(str(work_dir))
 
                 # Step 1: Environment setup and URL validation (4%)
                 await update_progress_with_metadata(job_data, " Validating URL and setting up environment...", 4.0)
 
-                # Step 2: GitLab access validation (8%)
-                await update_progress_with_metadata(job_data, " Validating GitLab access...", 8.0)
-                await _validate_gitlab_access()
-                is_whitelisted = await gitlab_manager.check_whitelist(str(job_data["dump_args"]["url"]))
+                # Step 2: Repository storage validation (8%)
+                await update_progress_with_metadata(job_data, " Validating repository storage...", 8.0)
+                _validate_repo_root()
+                is_whitelisted = await repo_manager.check_whitelist(str(job_data["dump_args"]["url"]))
 
                 # Step 3: URL optimization and mirror selection (12%)
                 await update_progress_with_metadata(job_data, " Optimizing download URL and selecting mirrors...", 12.0)
@@ -659,26 +661,25 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 job_data["metadata"]["device_info"] = device_props
                 await update_progress_with_metadata(job_data, " Device analysis completed", 68.0)
 
-                # Step 13: Checking/creating GitLab subgroup (70%)
-                await update_progress_with_metadata(job_data, " Checking GitLab subgroup...", 70.0)
+                # Step 13: Checking repository (70%)
+                await update_progress_with_metadata(job_data, " Checking repository...", 70.0)
 
-                # Step 14: Checking/creating GitLab project (72%)
-                await update_progress_with_metadata(job_data, " Checking GitLab project...", 72.0)
+                # Step 14: Checking branch (72%)
+                await update_progress_with_metadata(job_data, " Checking branch...", 72.0)
 
-                # Step 15: Setting up git repository (74%)
-                await update_progress_with_metadata(job_data, " Creating GitLab repository...", 74.0)
+                # Step 15: Committing and pushing (74%)
+                await update_progress_with_metadata(job_data, " Pushing to repository...", 74.0)
 
-                # Use periodic timer for GitLab operation (longest post-download operation)
-                gitlab_progress = {
-                    "current_step": "GitLab",
+                # Use periodic timer for the push (longest post-download operation)
+                push_progress = {
+                    "current_step": "Push",
                     "total_steps": 25,
                     "current_step_number": 15,
                     "percentage": 74.0,
                 }
-                async with PeriodicTimerUpdate(job_data, " Creating GitLab repository...", gitlab_progress):
-                    repo_url, repo_path = await gitlab_manager.create_and_push_repository(
+                async with PeriodicTimerUpdate(job_data, " Pushing to repository...", push_progress):
+                    repo_url, repo_path = await repo_manager.create_and_push_repository(
                         device_props,
-                        settings.DUMPER_TOKEN,
                         force=job_data["dump_args"].get("force", False),
                     )
 
@@ -688,7 +689,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                 # Step 17: Sending notification (92%)
                 await update_progress_with_metadata(job_data, " Sending channel notification...", 92.0)
 
-                await gitlab_manager.send_channel_notification(
+                await repo_manager.send_channel_notification(
                     device_props,
                     repo_url,
                     str(job_data["dump_args"]["url"]),
@@ -727,7 +728,7 @@ async def process_firmware_dump(ctx, job_data: Dict[str, Any]) -> Dict[str, Any]
                     "repository": {"url": e.repo_url, "path": e.repo_path},
                     "error_context": {
                         "message": str(e),
-                        "current_step": "GitLab branch already exists",
+                        "current_step": "Branch already exists",
                         "last_successful_step": _derive_last_successful_step(
                             progress_history,
                             failed_step,

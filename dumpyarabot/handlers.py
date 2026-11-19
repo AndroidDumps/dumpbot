@@ -447,7 +447,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text += "\n*Option Flags:*\n"
     help_text += "• `a` - Use alternative dumper for rare firmware types unsupported by primary dumper\n"
     help_text += "• `f` - Force re-dump (skip existing dump/branch check)\n"
-    help_text += "• `p` - Use private dump (Deletes message, processes in background, Firmware URL = Not visible, Finished dump in Gitlab = Visible.)\n"
+    help_text += "• `p` - Use private dump (Deletes message, processes in background, Firmware URL = Not visible, Finished dump in the dumps repo = Visible.)\n"
 
     await message_queue.send_reply(
         chat_id=chat.id,

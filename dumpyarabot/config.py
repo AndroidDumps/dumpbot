@@ -1,9 +1,13 @@
+"""Settings, Telegram callback prefixes and bot command definitions."""
+
 from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Bot and worker settings from the environment and ``.env``."""
+
     TELEGRAM_BOT_TOKEN: str
 
     SUDO_USERS: list[int] = []
@@ -50,11 +54,14 @@ class Settings(BaseSettings):
     # Default: https://api.telegram.org/bot
     TELEGRAM_API_BASE_URL: Optional[str] = None
 
-    # Gitlab API Token
-    DUMPER_TOKEN: str
-    # Keep TLS verification on. Disable it only for a temporary certificate
-    # problem on the trusted GitLab server.
-    GITLAB_VERIFY_SSL: bool = True
+    # Bare dump repos (served by cgit) live at <REPO_ROOT>/dumps/<subgroup>/<repo>.git.
+    REPO_ROOT: str
+    # git that rebuilds the multi-pack index + bitmap after each push.
+    REPO_INDEX_GIT_BINARY: str = "git"
+    # Regenerates the cgit repo list after a repo is created; empty disables it.
+    CGIT_REPOLIST_COMMAND: str = ""
+    # Public cgit base URL for links to pushed branches.
+    REPO_PUBLIC_BASE_URL: str = "https://dumps.tadiphone.dev"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
