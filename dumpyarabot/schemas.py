@@ -96,7 +96,7 @@ class DumpJob(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    result_data: Optional[Dict[str, Any]] = None  # GitLab URLs, build info, etc.
+    result_data: Optional[Dict[str, Any]] = None  # Repository URLs, build info, etc.
     error_details: Optional[str] = None
     initial_message_id: Optional[int] = None  # Track the initial message for editing
     initial_chat_id: Optional[int] = None     # Track chat for cross-chat support

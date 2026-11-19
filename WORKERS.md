@@ -29,7 +29,7 @@ The dump worker system provides a scalable, fault-tolerant alternative to Jenkin
 ```
 User Command → Validation → Job Queue → Worker → Processing → Completion
      ↓              ↓           ↓          ↓          ↓           ↓
-  /dump URL    DumpArguments  Redis    Worker   Extraction   GitLab Push
+  /dump URL    DumpArguments  Redis    Worker   Extraction   git Push
                    ↓              ↓         ↓          ↓           ↓
               Job Creation    Job Storage  Process   Progress   Notification
 ```
@@ -41,7 +41,7 @@ User Command → Validation → Job Queue → Worker → Processing → Completi
 - **Dual extraction** methods (Python dumpyara + alternative dumper)
 - **Comprehensive property extraction** with extensive fallback logic
 - **Boot image processing** with device tree extraction
-- **GitLab integration** with repository/subgroup creation
+- **Local git push** to bare repos served by cgit (created on demand)
 - **Cross-chat messaging** with status updates
 - **Channel notifications** for whitelisted firmware
 
@@ -132,7 +132,6 @@ services:
     command: python run_arq_worker.py worker_01
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DUMPER_TOKEN=${DUMPER_TOKEN}
     depends_on:
       - redis
     restart: unless-stopped
@@ -142,7 +141,6 @@ services:
     command: python run_arq_worker.py worker_02
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DUMPER_TOKEN=${DUMPER_TOKEN}
     depends_on:
       - redis
     restart: unless-stopped
@@ -184,8 +182,11 @@ redis-cli MONITOR
 REDIS_URL=redis://localhost:6379/0
 REDIS_KEY_PREFIX=dumpyarabot:
 
-# GitLab integration
-DUMPER_TOKEN=your_gitlab_token_here
+# Dump repositories (bare repos served by cgit); only REPO_ROOT is required
+REPO_ROOT=/srv/git
+REPO_INDEX_GIT_BINARY=git
+CGIT_REPOLIST_COMMAND=/path/to/cgit-repolist
+REPO_PUBLIC_BASE_URL=https://dumps.tadiphone.dev
 
 # Telegram (for channel notifications)
 API_KEY=your_telegram_bot_token
@@ -260,7 +261,7 @@ Jobs automatically retry on failure with exponential backoff:
 
 1. **Download failures**: Mirror optimization and tool fallbacks
 2. **Extraction failures**: Dual extraction method support
-3. **GitLab failures**: Detailed API error reporting
+3. **Push failures**: git error output from the local push
 4. **Worker crashes**: Job requeue for other workers
 5. **Network issues**: Configurable timeouts and retries
 6. **Existing branch**: The job stops and the Telegram message includes a link to the existing dump.
@@ -338,13 +339,10 @@ redis-cli KEYS "arq:in-progress:*"
 redis-cli ZREM "dumpyarabot:arq_jobs" "<job_id>"
 ```
 
-#### GitLab integration failures
+#### Repository push failures
 ```bash
-# Test GitLab connectivity
-curl -H "Authorization: Bearer $DUMPER_TOKEN" https://dumps.tadiphone.dev/api/v4/user
-
-# Check token permissions
-# Token needs: api, read_repository, write_repository
+# The worker user needs write access to the repo, and to its target if it is a symlink
+ls -ld "$(realpath "$REPO_ROOT/dumps/<subgroup>/<repo>.git")"
 ```
 
 ### Debug Mode
@@ -362,20 +360,19 @@ Worker logs include:
 - Job assignment and progress
 - Download mirror selection
 - Extraction method decisions
-- GitLab API interactions
+- Repository push and cgit refresh
 - Error details with stack traces
 
 ## Security Considerations
 
 ### Access Control
-- Workers inherit bot's GitLab permissions
+- Workers push with the bot user's filesystem permissions under REPO_ROOT
 - Jobs run with worker process permissions
 - Temporary files isolated per job
 - No credential storage in job data
 
 ### Network Security
 - Redis should be on private network
-- GitLab API over HTTPS only
 - Download URL validation
 - Whitelist-based channel publishing
 
@@ -406,7 +403,7 @@ Worker logs include:
 
 1. **Install dependencies**: `uv sync` (includes ARQ dependency)
 2. **Configure Redis**: Set `REDIS_URL` in environment
-3. **Set GitLab token**: Export `DUMPER_TOKEN`
+3. **Repository storage**: Set `REPO_ROOT` and make sure it is writable
 4. **Start ARQ worker**: `arq worker_settings.WorkerSettings` or `python run_arq_worker.py`
 5. **Start bot**: `python -m dumpyarabot`
 6. **Test dump**: `/dump https://example.com/firmware.zip`
