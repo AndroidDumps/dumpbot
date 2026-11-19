@@ -363,6 +363,17 @@ class RepoManager:
             description="Configuring git user email"
         )
 
+        # The work dir is thrown away after the push: don't let the commit
+        # start an automatic repack of it, and skip delta search when packing
+        # for the push (firmware binaries gain little from it; it was the
+        # main CPU cost).
+        for key, value in (("gc.auto", "0"), ("pack.window", "0")):
+            await run_git_command(
+                "config", key, value,
+                cwd=self.work_dir,
+                description=f"Setting {key}",
+            )
+
         # Add all files
         console.print("[blue]Adding files to git...[/blue]")
         await run_git_command(
